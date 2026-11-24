@@ -44,12 +44,30 @@ public sealed class KillAwareMessagingTests : IDisposable
     [InlineData("not json")]
     [InlineData("[]")]
     [InlineData("""{ "epoch": "soon" }""")]
+    [InlineData("""{ "epoch": 0 }""")]    // the host reads epoch <= 0 as malformed and latches off; the reader must say the same
+    [InlineData("""{ "epoch": -5 }""")]
     [InlineData("""{ "epoch": 1700000000, "held": true }""")]
     public void A_kill_record_that_is_unreadable_or_held_is_off_even_with_an_explicit_remote(string record)
     {
         File.WriteAllText(Config, """{ "version": 1, "agentMessaging": { "remote": "own-account" } }""");
         File.WriteAllText(Record, record);
         Assert.False(LiteKill.IsOn(folder));
+        Assert.False(new LiteKill(folder).On);   // and the host agrees
+    }
+
+    // The one-shot reader only reads: no file is written, changed or added, whatever the record says.
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("""{ "epoch": 0 }""")]
+    [InlineData("""{ "epoch": 1700000000 }""")]
+    public void The_one_shot_reader_writes_nothing(string record)
+    {
+        File.WriteAllText(Config, """{ "version": 1, "agentMessaging": { "remote": "own-account" } }""");
+        File.WriteAllText(Record, record);
+        string Snapshot() => string.Join("|", Directory.GetFiles(folder, "*", SearchOption.AllDirectories).Order().Select(f => f + ":" + File.ReadAllText(f)));
+        var before = Snapshot();
+        LiteKill.IsOn(folder);
+        Assert.Equal(before, Snapshot());
     }
 
     [Fact]

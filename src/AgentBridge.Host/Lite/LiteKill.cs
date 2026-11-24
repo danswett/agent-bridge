@@ -69,9 +69,7 @@ public sealed class LiteKill : ILiteMode
             if (!Path.Exists(path)) { return true; }
             if (!File.Exists(path)) { return false; }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (doc.RootElement.ValueKind != JsonValueKind.Object || !doc.RootElement.TryGetProperty("epoch", out var e) || e.ValueKind != JsonValueKind.Number || !e.TryGetInt64(out var epoch) || epoch < 0)
-            { return false; }
-            if (doc.RootElement.TryGetProperty("held", out var h) && h.ValueKind == JsonValueKind.True) { return false; }
+            if (!TryParse(doc.RootElement, out var epoch, out var kept) || kept) { return false; }
             return settings.RemoteKeyOn || epoch == 0;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
@@ -237,6 +235,14 @@ public sealed class LiteKill : ILiteMode
 
     public void ForgetPushed() => Interlocked.Exchange(ref pushed, 0);
 
+    // The one reading of a kill record, shared by the host and the one-shot reader: an object with a positive whole epoch; zero, negative or anything else is malformed.
+    static bool TryParse(JsonElement root, out long epoch, out bool held)
+    {
+        epoch = 0;
+        held = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("held", out var h) && h.ValueKind == JsonValueKind.True;
+        return root.ValueKind == JsonValueKind.Object && root.TryGetProperty("epoch", out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out epoch) && epoch > 0;
+    }
+
     long ReadEpoch(bool baseline = false)
     {
         long n;
@@ -251,12 +257,12 @@ public sealed class LiteKill : ILiteMode
                 return Interlocked.Read(ref seen);
             }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (doc.RootElement.ValueKind != JsonValueKind.Object || !doc.RootElement.TryGetProperty("epoch", out var e) || e.ValueKind != JsonValueKind.Number || !e.TryGetInt64(out n) || n <= 0)
+            if (!TryParse(doc.RootElement, out n, out var kept))
             {
                 Unreadable("malformed");
                 return Interlocked.Read(ref seen);
             }
-            held = doc.RootElement.TryGetProperty("held", out var h) && h.ValueKind == JsonValueKind.True;
+            held = kept;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {

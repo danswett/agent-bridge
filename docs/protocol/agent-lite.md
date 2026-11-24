@@ -164,8 +164,8 @@ journal is **memory only, 150 s**: a restart forgets it, and a lookup after one 
 2. Then run `agent-bridge-host agents lite kill [--profile <name>]` (L6) at a machine's own command line; it is
    refused inside an agent session. It turns that machine off at once: it saves a new kill epoch, sets
    `agentMessaging.remote` to `off` and cancels the sends in flight there (they end `unconfirmed`). If the setting
-   cannot be written (another part of `config.json` is invalid), the command exits 1 and the kill record holds the
-   machine off, across restarts, until a start can write the setting off. Within about 5 seconds the running host
+   cannot be written (another part of `config.json` is invalid), the kill record holds the
+   machine off (the command exits 0 when it does; it exits 1 only if messaging is still on afterwards), across restarts, until a start can write the setting off. Within about 5 seconds the running host
    tells each host the relay lists as present on this account, which turns off too; it retries a host that
    answers with an error or has not taken the epoch. A kill is believed only from such a host whose channel key
    matches its device id (no pin), through the push, the epoch on a lite send, or an ack; it only ever turns the
