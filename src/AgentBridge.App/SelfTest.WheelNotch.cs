@@ -80,10 +80,18 @@ static partial class SelfTest
             }
             for (var n = 0; n < 30; n++) { await Frame(); }
             phase = "up";
+            // Measured from the end, as the person sees it: older turns drawn above during a notch raise the offset by
+            // their height while what is read stays put (CI 45303880104 read -660, -306, … as raw offset). Eight notches
+            // stay within the first viewport above the end, where every row below is already laid out.
             var moved = new List<double>();
-            for (var n = 0; n < 8; n++) { var (from, to, _) = await Notch(-1); if (to > 0.5) { moved.Add(Math.Round(from - scroll.VerticalOffset, 1)); } }
+            for (var n = 0; n < 8; n++)
+            {
+                var fromEnd = scroll.ScrollableHeight - scroll.VerticalOffset;
+                var (_, to, _) = await Notch(-1);
+                if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); }
+            }
             check(moved.Count >= 4 && moved.All(d => Math.Abs(d - notch) <= 1.5),
-                $"wheel notch distance: identical notches up move {notch} each while older history draws (moved {string.Join(", ", moved)})");
+                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws (moved {string.Join(", ", moved)})");
             phase = "down";
             var (offsets, back) = (new List<double>(), 0.0);
             var high = scroll.VerticalOffset;
