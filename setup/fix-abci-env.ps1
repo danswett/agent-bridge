@@ -22,6 +22,9 @@
   that anyone but an admin or that runner's own account could write (up to -Root), or that the runner account can't
   write (setup/abci-install-dir.ps1), refuses the whole run.
 
+  Note: a runner root that inherits C:\'s default rights (Users may create folders, Authenticated Users modify) is
+  refused as "writable by" those groups; its ACL must be fixed first (no inherited write for non-admins).
+
   A value with a newline, ';' or '=' (which would end or split its .env line) refuses the run too. Each runner's
   .NET folder is printed, also under -WhatIf.
 
@@ -61,8 +64,10 @@ if ($testMode) {
     }
 } elseif ($Root -ne $realRoot) { throw "-Root other than $realRoot is for tests only." }
 
-$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $elevated -and -not $WhatIfPreference -and -not $testMode) { throw 'Run this from an elevated PowerShell (or add -WhatIf to see the plan).' }
+# Under the seam, AGENT_BRIDGE_ABCI_TEST_ELEVATED stands in for the token, so the check itself is tested.
+$elevated = if ($testMode) { $env:AGENT_BRIDGE_ABCI_TEST_ELEVATED -eq '1' } else {
+    ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
+if (-not $elevated -and -not $WhatIfPreference) { throw 'Run this from an elevated PowerShell (or add -WhatIf to see the plan).' }
 
 # A .env line is NAME=value up to the line end; the runner splits PATH on ';'.
 function Test-EnvValue([string]$Value) { $Value -notmatch '[\r\n;=]' }
@@ -108,15 +113,15 @@ if ($unsafe) { throw "Refusing, nothing changed: PATH folders the runner account
 if ('C:\Program Files\Python312' -notin $path) { Write-Warning 'No machine-wide Python 3.12 here: jobs that need python will still fail.' }
 $managed = '^(PATH|DOTNET_INSTALL_DIR|AGENT_BRIDGE_NUGET_SOURCE|DOTNET_CLI_TELEMETRY_OPTOUT)='
 
-$runners = if ($testMode) {
+$runners = @(if ($testMode) {
     @(Get-ChildItem -LiteralPath $Root -Directory | Where-Object Name -match '^\d+$' | ForEach-Object {
-            [pscustomobject]@{ FullName = $_.FullName; Name = $_.Name; Service = $null; Account = $null } } | Sort-Object { [int]$_.Name })
+            [pscustomobject]@{ FullName = $_.FullName; Name = $_.Name; Service = "test-runner-$($_.Name)"; Account = $null } } | Sort-Object { [int]$_.Name })
 } else {
     @(Get-CimInstance Win32_Service -Filter "Name like 'actions.runner.%'" | ForEach-Object {
             if ($_.PathName -and $_.PathName.Trim('"') -match ('^' + [regex]::Escape($Root) + '\\(\d+)\\bin\\')) { [pscustomobject]@{ FullName = Join-Path $Root $Matches[1]; Name = $Matches[1]; Service = $_.Name; Account = $_.StartName } }
         } | Sort-Object { [int]$_.Name })
-}
-if ($runners.Count -eq 0) { throw "No runner service runs from $Root\<N>\bin on this machine." }
+})
+if ($runners.Count -eq 0) { Write-Host "No runners found: no runner service runs from $Root\<N>\bin. Nothing changed."; exit 1 }
 
 # The account each runner's service runs as, and the .NET folder in its work folder that account must be able to write.
 $refused = @()
@@ -144,10 +149,10 @@ foreach ($runner in $runners) {
 }
 if ($refused) { throw "Refusing, nothing changed: .NET folders the runner account couldn't install to:`n  $($refused -join "`n  ")" }
 
-$busy = @()
-foreach ($runner in $runners) {
-    $dir = $runner.FullName
-    $envFile = Join-Path $dir '.env'
+# All or nothing: every .env is read and written to <.env>.new first; only when every one is written are they moved
+# into place, and only then is any service restarted. A failure before the moves changes no .env.
+$plans = foreach ($runner in $runners) {
+    $envFile = Join-Path $runner.FullName '.env'
     $keep = @()
     try {
         if (Test-Path -LiteralPath $envFile) { $keep = @(Get-Content -LiteralPath $envFile | Where-Object { $_ -notmatch $managed }) }
@@ -155,15 +160,31 @@ foreach ($runner in $runners) {
         if (-not $WhatIfPreference) { throw }
         Write-Host "$envFile can't be read without elevation; its other lines would be kept."
     }
-    $lines = $keep + @("PATH=$($path -join ';')", "DOTNET_INSTALL_DIR=$($runner.InstallDir)", "AGENT_BRIDGE_NUGET_SOURCE=$Mirror", 'DOTNET_CLI_TELEMETRY_OPTOUT=1')
-    if ($PSCmdlet.ShouldProcess($envFile, "set PATH, DOTNET_INSTALL_DIR, AGENT_BRIDGE_NUGET_SOURCE and DOTNET_CLI_TELEMETRY_OPTOUT ($($keep.Count) other line(s) kept)")) {
-        Set-Content -LiteralPath $envFile -Value $lines -Encoding utf8NoBOM
+    [pscustomobject]@{ Runner = $runner; File = $envFile; Keep = $keep.Count
+        Lines = $keep + @("PATH=$($path -join ';')", "DOTNET_INSTALL_DIR=$($runner.InstallDir)", "AGENT_BRIDGE_NUGET_SOURCE=$Mirror", 'DOTNET_CLI_TELEMETRY_OPTOUT=1') }
+}
+$staged = @()
+try {
+    foreach ($plan in $plans) {
+        if ($PSCmdlet.ShouldProcess($plan.File, "set PATH, DOTNET_INSTALL_DIR, AGENT_BRIDGE_NUGET_SOURCE and DOTNET_CLI_TELEMETRY_OPTOUT ($($plan.Keep) other line(s) kept)")) {
+            Set-Content -LiteralPath "$($plan.File).new" -Value $plan.Lines -Encoding utf8NoBOM
+            $staged += $plan
+        }
     }
-    if (-not $runner.Service) { continue }
-    $service = @([pscustomobject]@{ Name = $runner.Service })
+} catch {
+    foreach ($plan in $staged) { Remove-Item -LiteralPath "$($plan.File).new" -Force -ErrorAction SilentlyContinue }
+    throw "Refusing, nothing changed: a .env couldn't be written ($($_.Exception.Message))."
+}
+foreach ($plan in $staged) { Move-Item -LiteralPath "$($plan.File).new" -Destination $plan.File -Force; Write-Host "Wrote $($plan.File)" }
+
+$busy = @()
+# Under -WhatIf nothing was staged: show the restarts the plan would make.
+foreach ($plan in $(if ($WhatIfPreference) { $plans } else { $staged })) {
+    $name = $plan.Runner.Service
     $working = @(Get-CimInstance Win32_Process -Filter "Name = 'Runner.Worker.exe'" |
-            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$dir\", [StringComparison]::OrdinalIgnoreCase) })
-    if ($working.Count -gt 0) { $busy += $service[0].Name; Write-Warning "$($service[0].Name) is running a job: not restarted. Run this again once it is idle."; continue }
-    if ($PSCmdlet.ShouldProcess($service[0].Name, 'restart, so the runner reads its .env')) { Restart-Service -Name $service[0].Name }
+            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$($plan.Runner.FullName)\", [StringComparison]::OrdinalIgnoreCase) })
+    if ($working.Count -gt 0) { $busy += $name; Write-Warning "$name is running a job: not restarted. Run this again once it is idle."; continue }
+    if ($testMode) { Write-Host "Restarted (test, no service touched): $name"; continue }
+    if ($PSCmdlet.ShouldProcess($name, 'restart, so the runner reads its .env')) { Restart-Service -Name $name }
 }
 if ($busy) { Write-Host "Not restarted (busy): $($busy -join ', ')" } else { Write-Host "Done: $($runners.Count) runner(s) under $Root." }

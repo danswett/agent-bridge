@@ -149,6 +149,77 @@ public class AbCiEnvScriptTests
         }
     }
 
+    [Fact]
+    public void Without_elevation_only_WhatIf_runs()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 1);
+            var (exit, output) = Run(root, elevated: false);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("Run this from an elevated PowerShell", output);
+            Assert.False(File.Exists(Path.Combine(root, "1", ".env")));
+            (exit, output) = Run(root, "-WhatIf", elevated: false);
+            Assert.True(exit == 0, output);
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
+    [Fact]
+    public void No_runners_is_reported_and_exits_1_cleanly()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var (exit, output) = Run(Tree(folder, "root", 0));
+            Assert.Equal(1, exit);
+            Assert.Contains("No runners found", output);
+            Assert.DoesNotContain("cannot be found on this object", output);
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
+    // All or nothing: every .env is written before any restart, and a failed write leaves every .env as it was.
+    [Fact]
+    public void Every_env_is_written_before_any_restart_and_a_failed_write_changes_none()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 2);
+            var (exit, output) = Run(root);
+            Assert.True(exit == 0, output);
+            var lines = output.Split('\n');
+            var lastWrite = Array.FindLastIndex(lines, l => l.StartsWith("Wrote ", StringComparison.Ordinal));
+            var firstRestart = Array.FindIndex(lines, l => l.StartsWith("Restarted (test", StringComparison.Ordinal));
+            Assert.Equal(2, lines.Count(l => l.StartsWith("Restarted (test", StringComparison.Ordinal)));
+            Assert.True(lastWrite >= 0 && lastWrite < firstRestart, output);
+
+            foreach (var n in new[] { "1", "2" }) { File.Delete(Path.Combine(root, n, ".env")); }
+            Directory.CreateDirectory(Path.Combine(root, "2", ".env.new"));
+            (exit, output) = Run(root);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("Refusing, nothing changed: a .env couldn't be written", output);
+            Assert.DoesNotContain("Restarted", output);
+            Assert.False(File.Exists(Path.Combine(root, "1", ".env")));
+            Assert.False(File.Exists(Path.Combine(root, "1", ".env.new")));
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
     static string TempFolder() => Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "abci-env-test-" + Guid.NewGuid().ToString("N"))).FullName;
 
     // A junction needs no privilege (a symbolic link does).
@@ -184,12 +255,13 @@ public class AbCiEnvScriptTests
         dir.SetAccessControl(acl);
     }
 
-    static (int Exit, string Output) Run(string root, string arg = "", string value = "", bool testFlag = true)
+    static (int Exit, string Output) Run(string root, string arg = "", string value = "", bool testFlag = true, bool elevated = true)
     {
         var script = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "setup", "fix-abci-env.ps1");
         var start = new ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
         if (testFlag) { start.Environment["AGENT_BRIDGE_ABCI_TEST"] = "1"; }
         start.Environment["AGENT_BRIDGE_ABCI_TEST_ACCOUNT"] = Runner;
+        start.Environment["AGENT_BRIDGE_ABCI_TEST_ELEVATED"] = elevated ? "1" : "0";
         start.Environment["AGENT_BRIDGE_ABCI_TEST_PATH"] = "C:\\Windows";
         start.Environment["NO_COLOR"] = "1";
         start.Environment["TERM"] = "dumb";
