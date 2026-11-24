@@ -1,0 +1,67 @@
+From cfd15a55631ead4d7c24034ff9aca019140b37cc Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 18:24:08 -0800
+Subject: [PATCH] CI S2: full.yml's trigger also requires the run to be this
+ repository's (Part of #4104)
+
+The trigger job's ok output tests head_repository.full_name == github.repository beside conclusion, event and branch, so a fork's run
+never starts a FULL job (the catalog check requires it). The event-table test gains the repository column and fork rows.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/full.yml                     |  2 +-
+ .../FullWorkflowTests.cs                       | 18 +++++++++++-------
+ 2 files changed, 12 insertions(+), 8 deletions(-)
+
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index fe432bc54..02fb4d633 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -34,7 +34,7 @@ jobs:
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+     outputs:
+-      ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
++      ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) }}
+     steps:
+       - name: The commit under test
+         env:
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+index 03dc1bc5b..624d6ced6 100644
+--- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -47,13 +47,15 @@ public class FullWorkflowTests
+     }
+ 
+     [Theory]
+-    [InlineData("workflow_run", "success", "push", "main", true)]
+-    [InlineData("workflow_run", "failure", "push", "main", false)]
+-    [InlineData("workflow_run", "cancelled", "push", "main", false)]
+-    [InlineData("workflow_run", "success", "pull_request", "main", false)]
+-    [InlineData("workflow_run", "success", "push", "feature", false)]
+-    [InlineData("workflow_dispatch", null, null, null, true)]
+-    public void The_trigger_job_says_ok_only_for_a_green_push_run_of_ci_on_main_or_a_run_by_hand(string eventName, string? conclusion, string? runEvent, string? branch, bool ok)
++    [InlineData("workflow_run", "success", "push", "main", "o/r", true)]
++    [InlineData("workflow_run", "failure", "push", "main", "o/r", false)]
++    [InlineData("workflow_run", "cancelled", "push", "main", "o/r", false)]
++    [InlineData("workflow_run", "success", "pull_request", "main", "o/r", false)]
++    [InlineData("workflow_run", "success", "push", "feature", "o/r", false)]
++    [InlineData("workflow_run", "success", "push", "main", "evil/r", false)]
++    [InlineData("workflow_run", "success", "pull_request", "main", "evil/r", false)]
++    [InlineData("workflow_dispatch", null, null, null, null, true)]
++    public void The_trigger_job_says_ok_only_for_a_green_push_run_of_ci_on_main_of_this_repository_or_a_run_by_hand(string eventName, string? conclusion, string? runEvent, string? branch, string? repository, bool ok)
+     {
+         var job = (YamlMappingNode)Jobs("full.yml")["trigger"];
+         var output = Scalar(job["outputs"], "ok");
+@@ -64,6 +66,8 @@ public class FullWorkflowTests
+             ["github.event.workflow_run.conclusion"] = conclusion,
+             ["github.event.workflow_run.event"] = runEvent,
+             ["github.event.workflow_run.head_branch"] = branch,
++            ["github.event.workflow_run.head_repository.full_name"] = repository,
++            ["github.repository"] = "o/r",
+         });
+ 
+         Assert.Equal(ok, value is true || value is string s && s == "true");
+-- 
+2.56.1.windows.1
+
