@@ -51,7 +51,7 @@ internal static class CliSettingsEditor
     }
 
     // What the person is told before and while a settings file is changed: the path, what is added, that nothing else is touched, where the original is kept, the way back.
-    public static string Notice(bool dryRun, string path, string adds, string backup) =>
-        $"{(dryRun ? "Would change" : "Changing")} {path}: adds {adds} and nothing else; your other settings are not touched. The original is kept once at {backup}. " +
+    public static string Notice(bool dryRun, string path, string adds, string untouched, string backup) =>
+        $"{(dryRun ? "Would change" : "Changing")} {path}: adds {adds} and nothing else; your other {untouched} are not touched. The original is kept once at {backup}. " +
         "Remove restores it, taking out only these entries. No token is written.";
 }

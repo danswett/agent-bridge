@@ -257,7 +257,7 @@ public sealed class StandaloneHooks(
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
         // Shown to the person (owner decision, Nov 23 about 23:05 PT): what is added, where, that only this product's own entries are touched, and the way back.
-        if (agent == "claude") { output.WriteLine(CliSettingsEditor.Notice(dryRun, path, "this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd)", Path.Combine(HookFolder, "backups", "claude-settings.json"))); }
+        if (agent == "claude") { output.WriteLine(CliSettingsEditor.Notice(dryRun, path, "this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd)", "settings and hooks", Path.Combine(HookFolder, "backups", "claude-settings.json"))); }
         if (dryRun) { return; }
         if (agent == "claude") { CliSettingsEditor.BackupOnce(Path.Combine(HookFolder, "backups", "claude-settings.json"), path); }
         // Save ownership first: an interrupted install can be safely retried or removed. The

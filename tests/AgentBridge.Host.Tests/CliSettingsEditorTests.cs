@@ -57,21 +57,22 @@ public sealed class CliSettingsEditorTests : IDisposable
         File.WriteAllText(P("bad.json"), "{not json");
         var said = new StringWriter();
 
-        Assert.Null(CliSettingsEditor.Original(P("bad.json"), new JsonObject(), said, "hooks"));
+        Assert.Null(CliSettingsEditor.Original(P("bad.json"), new JsonObject(), said, "servers"));
 
         Assert.Contains("unreadable", said.ToString());
-        Assert.Contains("only the owned hooks are removed", said.ToString());
+        Assert.Contains("only the owned servers are removed", said.ToString());
     }
 
     [Fact]
     public void The_notice_names_the_path_what_is_added_the_backup_and_the_way_back_and_says_would_for_a_dry_run()
     {
-        var dry = CliSettingsEditor.Notice(true, "C:/x/settings.json", "this product's own hooks (A, B)", "C:/x/backup.json");
-        var real = CliSettingsEditor.Notice(false, "C:/x/settings.json", "this product's own hooks (A, B)", "C:/x/backup.json");
+        var dry = CliSettingsEditor.Notice(true, "C:/x/settings.json", "this product's own hooks (A, B)", "settings and hooks", "C:/x/backup.json");
+        var real = CliSettingsEditor.Notice(false, "C:/x/settings.json", "this product's own hooks (A, B)", "settings and hooks", "C:/x/backup.json");
 
         Assert.StartsWith("Would change C:/x/settings.json: adds this product's own hooks (A, B)", dry);
         Assert.StartsWith("Changing C:/x/settings.json", real);
-        Assert.Contains("nothing else", real);
+        Assert.Contains("and nothing else; your other settings and hooks are not touched", real);
+        Assert.Contains("your other settings and servers are not touched", CliSettingsEditor.Notice(false, "p", "a", "settings and servers", "b"));
         Assert.Contains("C:/x/backup.json", real);
         Assert.Contains("Remove restores it", real);
         Assert.Contains("No token is written", real);
