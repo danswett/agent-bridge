@@ -29,8 +29,8 @@ a folder-trust question waiting, the folder still approved, one launch at a time
 ## Who is a coordinator (by recorded role, never by name)
 
 The host keeps no coordinator marker today: the launch record keeps no launcher principal and no role, and a name is
-display text. This change records, at launch, the launch's `role` (the validated role name the request already carries, in
-`LaunchProvenance`), and adds a person-set host setting `agents.resume.roles` (the role names that count as coordinators on
+display text. This change records, at launch, the launch's coordinator role (the optional `coordinatorRole` request field a person's launch
+carries, in `LaunchProvenance`; the worker `role` is a different thing, it narrows MCP servers and is not recorded), and adds a person-set host setting `agents.resume.roles` (the role names that count as coordinators on
 this machine). A caller is a coordinator only when its own session's recorded role is in that list. The default is an empty
 list, so resume is off until the person lists the roles (fail closed; setting `agents.resume.roles` is the owner's step); a caller with no recorded role, or one launched by a
 person without a role, is refused. No name, title or fleet-name lookup is ever used.
@@ -62,9 +62,11 @@ script, the app, the host CLI and any relay peer cannot reach `fleet.resume`), (
 | An adopted session, a script credential, the app, the host CLI | No | Wrong credential kind, or not on this op; a person resumes with the app's own Launch |
 | Another machine | No | `fleet.resume` is on the local pipe only; nothing crosses machines or people |
 
-**Open, found while writing this:** the app's Launch screen sends no `role`, so a person has no one-click way to record a coordinator
-role today (a person-class `session.launch` with `role` does record it). Until a Role field or a documented command exists, resume is
-off for everyone and the owner resumes by hand (fail closed). It is slice 3 below, small, and needed before the owner lists any role.
+**How a coordinator gets its role (slice 3, agent-bridge #4433):** the app's Launch screen has a Role box, which sends the new
+`coordinatorRole` request field. It is separate from the worker `role` (which narrows MCP servers and would strip a coordinator's tools). Only
+a person's launch records it; an agent's or a script's launch carrying it is refused, and it is for a new session only. `fleet.resume` reads it
+from the launch record (tested). Until the owner lists a role in `agents.resume.roles` and launches a coordinator with this box, resume stays off
+(fail closed). The PWA launch box sends no role yet.
 
 ## How it relates to kill-aware messaging (#4403) and the launch caps
 
@@ -97,7 +99,7 @@ Nothing is created, guessed or widened; the receipt is `refused` (the host log s
 | 1 | Launch record keeps the role; `WasFleetLaunched`, `RoleOf`, role guards (#4325) | built, armed |
 | 2a | `ResumeFleetAsync` in place, settings restored, `agents.resume.roles`, record superseded (#4325) | built, armed |
 | 2b | `fleet.resume` op, audit, pipe wiring, role carried, no role on a child launch (#4360) | built, stacked on #4325; closes #4318 |
-| 3 | A way for a person to record a coordinator role at launch (app Role field or a documented command) | to do, small |
+| 3 | `coordinatorRole` on the launch request and a Role box in the app; the resume reads it from the record (#4433) | built, stacked on #4360 |
 | 4 | Take a slot under the live-launch limit; a durable intent row | to do (known limits) |
 | 5 | MCP tool `resume_agent_session`, a thin wrapper over `fleet.resume` (`{session_id, request?}` returning `{id, request, outcome, reason?}`), offered with the `sessions.launch` capability, after the .NET MCP port | after the port |
 | later | A combined restart flag (end then resume) only if wanted after the beta | not built by design |
