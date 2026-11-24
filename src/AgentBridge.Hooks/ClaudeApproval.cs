@@ -19,6 +19,12 @@ public static class ClaudeApproval
     public static readonly TimeSpan MaxAge = TimeSpan.FromMinutes(2);
     public static readonly TimeSpan MaxFuture = TimeSpan.FromSeconds(5);
     public const int PreviewMax = 300;
+    // There is no authenticated channel for a device's answer yet (#3847: an unauthenticated local file never drives an answer), so NO code path here
+    // can produce an allow: the hook can print a deny or nothing. This stays false until that channel exists and is approved; Enabled is the one check.
+    public const bool AuthenticatedChannel = false;
+    public static bool Enabled(bool settingOn) => settingOn && AuthenticatedChannel;
+    // A prompt whose command would be shown cut is never answerable: the id binds the full input, but a person would see only a prefix.
+    public static bool Answerable(int commandLength) => commandLength <= PreviewMax;
     public const int MaxDecisionBytes = 4096;
     // What the hook waits for a decision, and the timeout Claude is given for it: the wait is the shorter, so the hook ends itself with no output.
     public static readonly TimeSpan Wait = TimeSpan.FromSeconds(100);
@@ -51,10 +57,9 @@ public static class ClaudeApproval
     public static string? Proof(string nonce, string eventJson) =>
         Parts(eventJson) is var (s, t, i) && RequestId(eventJson) is { } request ? Hash($"{nonce}\n{request}\n{s}\n{t}\n{i}", 64) : null;
 
-    // Claude's decision for a verdict. Anything but allow or deny is nothing: no output, and the prompt stays at the terminal.
+    // Claude's decision for a verdict: a deny, or nothing (no output, the prompt stays at the terminal). Never an allow: see AuthenticatedChannel.
     public static string Reply(string? verdict) => verdict switch
     {
-        "allow" => "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}\n",
         "deny" => "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"deny\",\"message\":\"Denied from a Slipgates device.\"}}}\n",
         _ => "",
     };
@@ -75,7 +80,7 @@ public static class ClaudeApproval
             if (at < since) { return (null, "early"); }
             if (now - at > MaxAge) { return (null, "stale"); }
             if (at - now > MaxFuture) { return (null, "future"); }
-            return Text("verdict") is "allow" or "deny" ? (Text("verdict"), null) : (null, "verdict");
+            return Text("verdict") switch { "deny" => ("deny", null), "allow" => (null, "unavailable"), _ => (null, "verdict") };
         }
         catch (JsonException) { return (null, "unreadable"); }
     }

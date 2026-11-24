@@ -14,7 +14,7 @@ public sealed class ClaudeApprovalTests
     static readonly string Id = ClaudeApproval.RequestId(Event)!;
     static readonly string Proof = ClaudeApproval.Proof(Nonce, Event)!;
 
-    static string Decision(string? proof = null, string? request = null, string verdict = "allow", string principal = "person", DateTimeOffset? at = null) =>
+    static string Decision(string? proof = null, string? request = null, string verdict = "deny", string principal = "person", DateTimeOffset? at = null) =>
         "{\"request\":\"" + (request ?? Id) + "\",\"proof\":\"" + (proof ?? Proof) + "\",\"verdict\":\"" + verdict + "\",\"principal\":\"" + principal
         + "\",\"at\":\"" + (at ?? Now).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'") + "\"}";
 
@@ -46,7 +46,6 @@ public sealed class ClaudeApprovalTests
     [Fact]
     public void The_hook_prints_claudes_decision_for_a_verdict_and_nothing_for_none()
     {
-        Assert.Equal("{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}\n", ClaudeApproval.Reply("allow"));
         var deny = ClaudeApproval.Reply("deny");
         Assert.Contains("\"behavior\":\"deny\"", deny);
         Assert.DoesNotContain("private", deny);
@@ -54,11 +53,26 @@ public sealed class ClaudeApprovalTests
         Assert.Equal("", ClaudeApproval.Reply("maybe"));
     }
 
-    [Theory]
-    [InlineData("allow")]
-    [InlineData("deny")]
-    public void A_persons_decision_made_for_this_prompt_after_it_began_is_taken(string verdict) =>
-        Assert.Equal((verdict, null), Check(Decision(verdict: verdict)));
+    [Fact]
+    public void A_persons_deny_made_for_this_prompt_after_it_began_is_taken() => Assert.Equal(("deny", null), Check(Decision()));
+
+    [Fact]
+    public void No_input_can_make_the_hook_print_an_allow_while_there_is_no_authenticated_channel()
+    {
+        foreach (var verdict in new[] { "allow", "Allow", "allow ", "deny", "", null, "always" }) { Assert.DoesNotContain("allow", ClaudeApproval.Reply(verdict)); }
+        // A person's allow, with every other check passed, is refused as unavailable, never taken.
+        Assert.Equal((null, "unavailable"), Check(Decision(verdict: "allow")));
+        Assert.False(ClaudeApproval.AuthenticatedChannel);
+        Assert.False(ClaudeApproval.Enabled(true));
+        Assert.False(ClaudeApproval.Enabled(false));
+    }
+
+    [Fact]
+    public void A_prompt_whose_command_would_be_shown_cut_is_never_answerable()
+    {
+        Assert.True(ClaudeApproval.Answerable(ClaudeApproval.PreviewMax));
+        Assert.False(ClaudeApproval.Answerable(ClaudeApproval.PreviewMax + 1));
+    }
 
     [Fact]
     public void A_decision_made_before_the_prompt_began_is_refused_so_an_old_allow_is_never_reused()
@@ -105,7 +119,7 @@ public sealed class ClaudeApprovalTests
     public async Task The_hook_waits_for_a_decision_and_takes_it_when_it_appears()
     {
         var polls = 0;
-        Assert.Equal("allow", await Await(() => ++polls < 3 ? null : Decision(at: Now.AddSeconds(2)), _ => { }));
+        Assert.Equal("deny", await Await(() => ++polls < 3 ? null : Decision(at: Now.AddSeconds(2)), _ => { }));
         Assert.Equal(3, polls);
     }
 
@@ -117,7 +131,7 @@ public sealed class ClaudeApprovalTests
     {
         var polls = 0;
         var log = new List<string>();
-        Assert.Equal("allow", await Await(() => ++polls == 1 ? throw new IOException("held open") : Decision(at: Now.AddSeconds(2)), log.Add));
+        Assert.Equal("deny", await Await(() => ++polls == 1 ? throw new IOException("held open") : Decision(at: Now.AddSeconds(2)), log.Add));
         Assert.Contains("claude approval decision unreadable: read", log);
         // The deadline is the monotonic elapsed time: the wall clock stepped back an hour does not make it wait longer than the 5 polls.
         var polled = 0;

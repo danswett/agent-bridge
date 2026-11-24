@@ -1,6 +1,7 @@
 # Answering a Claude Code permission prompt from a device (#1003)
 
-Status: **design plus PR1 (the hook-side contract); sensitive.** Nothing here is registered or on by default: PR1 adds the hook-side code and
+Status: **design and contract only; sensitive. No code path in this change can produce an allow** (a deny, or no output, only), because the one thing an allow
+needs, an authenticated channel for a device's answer (#3847), does not exist yet. Nothing here is registered or on by default: PR1 adds the hook-side code and
 its tests only. Part of the program C "fleet tools into Slipgates" work; #1003 is the No-RDP gap (a Claude permission prompt sends the person to
 the machine). The host side (the registration, the marker, the app and push) is PR2.
 
@@ -29,7 +30,8 @@ person answers on a device, and print that decision. With no usable decision it 
   has authenticated), and PR2 does not turn anything on before that is designed, tested and approved. Until then this contract is the hook side only.
 - **What is shown.** The device shows the host's bounded, escaped preview of the command (the existing escaped-approval rules, PR2). **A truncated command is never answerable**: the id binds the full input, but a person would see only a prefix. The hook's
   decision carries no command text and the log carries reasons only.
-- **Default off.** The existing `permissions.remoteApproval` defaults **on** (it governs Copilot approvals today), so this uses its own setting,
+- **Default off, checked in code.** `ClaudeApproval.Enabled(setting)` is false whatever the setting says while `AuthenticatedChannel` is false, and a test pins it.
+- **Default off (setting).** The existing `permissions.remoteApproval` defaults **on** (it governs Copilot approvals today), so this uses its own setting,
   **`permissions.claudeApproval`, default off** (PR2), registered only when on. Off means no hook, and the terminal prompt as today.
 - **Timeout.** The hook's wait (100 s, measured on a monotonic clock so a stepped wall clock cannot stretch it) is shorter than the hook timeout Claude is
   given (120 s, a test pins it), so the hook ends itself with no output rather than being cancelled. A read that fails is tried again. What Claude does when a hook is cancelled is not documented; the design does not rely on it.
@@ -49,7 +51,7 @@ A live check on a build is needed before PR2 turns anything on; none was done he
 ## PR1 (this change): the hook-side contract only
 
 `ClaudeApproval` (`AgentBridge.Hooks`): the request id; the decision file's path (`<runtime>\agent-bridge-claude\<session>.decision.json`) and
-fields (`request`, `verdict` `allow|deny`, `principal`, `at`); the verdict check above; the exact hook output; and the bounded wait on a fake
+fields (`request`, `proof`, `verdict`, `principal`, `at`); an `allow` verdict is refused as `unavailable` and only a `deny` is ever printed; the verdict check above; the exact hook output; and the bounded wait on a fake
 clock. It is not called by `HookRunner`, not registered, and writes nothing. Tests: `ClaudeApprovalTests`.
 
 ## PR2 (not started)
