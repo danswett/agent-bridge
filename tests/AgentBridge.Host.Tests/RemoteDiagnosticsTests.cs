@@ -80,6 +80,21 @@ public sealed class RemoteDiagnosticsTests
         }
     }
 
+    [Theory]
+    [InlineData(DiagnosticsRestartCause.App)]
+    [InlineData(DiagnosticsRestartCause.Watchdog)]
+    [InlineData(null)]
+    public async Task The_last_restart_names_a_recorded_cause_and_says_not_recorded_otherwise(DiagnosticsRestartCause? cause)
+    {
+        var diagnostics = Diagnostics(bind: false);
+        var started = time.GetUtcNow().AddMinutes(-90);
+        diagnostics.Bind(() => new RelayStatus(RelayState.Off, null, null, null), () => null, started, cause);
+
+        var restart = (await diagnostics.SnapshotAsync(DiagnosticsProtocol.DefaultEntries, time.GetUtcNow())).LastRestart;
+
+        Assert.Equal((started, cause, cause is null ? DiagnosticsMissing.NotRecorded : (DiagnosticsMissing?)null), (restart.At, restart.Cause, restart.CauseMissing));
+    }
+
     [Fact]
     public async Task What_is_not_known_is_said_as_a_code_never_as_a_healthy_default()
     {

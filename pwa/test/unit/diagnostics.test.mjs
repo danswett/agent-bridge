@@ -158,6 +158,13 @@ test('what a host does not know is said as unavailable, never as healthy', () =>
   assert.equal(readDiagnostics({ ...snapshot(), schema: 2 }), null);
 });
 
+test('a recorded restart cause is shown, an unknown one is unknown, and a host without the field still reads (#1964)', () => {
+  const line = (lastRestart) => diagnosticsText(readDiagnostics(snapshot({ lastRestart })), 'Laptop').split('\n').find((l) => l.startsWith('last restart'));
+  assert.match(line({ at: '2025-01-01T00:00:00Z', causeMissing: null, cause: 'watchdog' }), /, cause watchdog$/);
+  assert.match(line({ at: '2025-01-01T00:00:00Z', causeMissing: null, cause: 'meteor' }), /, cause unknown$/);
+  assert.match(line({ at: '2025-01-01T00:00:00Z', causeMissing: 'notRecorded' }), /, cause unavailable \(notRecorded\)$/);
+});
+
 test('the report names the product, the machine and the time, and shows times in Pacific', () => {
   const text = diagnosticsText(readDiagnostics(snapshot({ lastRestart: { at: '2025-01-01T00:00:00Z', causeMissing: 'notRecorded' } })), 'Laptop');
   assert.equal(text.split('\n')[0], `${BRAND.name} diagnostics \u00B7 Laptop \u00B7 2026-11-03 04:00:00 PST`);

@@ -53,14 +53,14 @@ Result: a `DiagnosticsSnapshot`, written in camelCase with enum names in camelCa
 | `schema` | `1` |
 | `at` | When it was read |
 | `host` | `version` and `dev`: a validated version, or `null` with `versionMissing`. Also `startedAt` and `uptimeSeconds` |
-| `lastRestart` | `at` is this process's start. `causeMissing: "notRecorded"`: the cause is not recorded yet |
+| `lastRestart` | `at` is this process's start. `cause` is why, when the host that left recorded it: `app` (asked in the app), `device` (asked from a person's device) or `watchdog` (the departure watchdog); a client reads any other value as `unknown`. A crash, a reboot or a stop by hand leave no record, so `cause` is `null` with `causeMissing: "notRecorded"`, never a guess. The record is a one-shot `last-restart.json` in the profile folder, written when the host commits to a planned restart and read and removed by the next host if under ten minutes old |
 | `relay` | `state` is one of `off`, `signedOut`, `connecting`, `connected` or `refused`, plus `since`. The relay's address and detail are never included |
 | `holds` | `readOnly` is one of `none`, `configReadOnly`, `configProblem`, `agentHaBridge` or `other`. `discoveryHeld` lists the agent kinds whose sessions are being held. Reason text stays on the machine. Whether agent-ha-bridge is running comes from the last check something else made (a hello, the hello watch every 10 seconds, or an action). A read never makes a check of its own and never waits on one. With no check in the last 30 seconds, and no read-only setting, `readOnly` is `null` with `readOnlyMissing: "notStarted"`, never `none`. When the last check could not tell, it is `null` with `readOnlyMissing: "failed"`, never `agentHaBridge` |
 | `readiness` | `checkedAt`, and up to 8 `agents`. Each has an `id` (`copilot`, `claude`, `codex` or `other`), a validated `version`, the states of `installation`, `versionCheck`, `hooks`, `authentication` and `activation`, and `lastHookHandledAt`. `omitted` counts any agents beyond 8. Labels, folders, executables and details are never included |
 | `journal` | See below |
 
 Every field in the table is always sent. One with no value (a `version`, `since`, `checkedAt`,
-`lastHookHandledAt`, `discoveryHeld`, `readOnly`, or `lastRestart`'s `at` or `causeMissing`) is `null`,
+`lastHookHandledAt`, `discoveryHeld`, `readOnly`, or `lastRestart`'s `at`, `cause` or `causeMissing`) is `null`,
 never left out, and a client may refuse a snapshot that leaves one out. The `missing` codes below
 are left out when there is nothing missing.
 

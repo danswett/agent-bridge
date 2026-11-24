@@ -1264,7 +1264,8 @@ public static class ProtocolVectors
             .Refused("a-version-left-out", j => j.Remove("version"));
         // The last restart is this process's start; why it restarted is not recorded (#802).
         var restart = new DiagnosticsRestart(T0.AddHours(-2), DiagnosticsMissing.NotRecorded);
-        f.Record<DiagnosticsRestart>(Host).Valid("this-process", restart);
+        f.Record<DiagnosticsRestart>(Host).Valid("this-process", restart)
+            .Valid("a-planned-restart", new DiagnosticsRestart(T0.AddHours(-2), null, DiagnosticsRestartCause.Watchdog));
         var relay = new DiagnosticsRelay(DiagnosticsRelayState.Connected, T0.AddHours(-1));
         f.Record<DiagnosticsRelay>(Host)
             .Valid("connected", relay)

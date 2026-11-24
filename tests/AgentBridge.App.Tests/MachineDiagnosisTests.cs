@@ -264,6 +264,16 @@ public sealed class MachineDiagnosisTests : IAsyncLifetime
         Assert.True(diagnosis.CanDiagnose);
     }
 
+    [Fact]
+    public void A_recorded_restart_cause_is_named_in_the_report_and_an_unrecorded_one_is_not_guessed()
+    {
+        var at = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var snapshot = Snapshot(at, new DiagnosticsReadiness(null, [], 0, DiagnosticsMissing.NotStarted));
+
+        Assert.Contains(", cause device\n", MachineDiagnosisViewModel.Format(snapshot with { LastRestart = new DiagnosticsRestart(at, null, DiagnosticsRestartCause.Device) }, "Laptop"));
+        Assert.Contains(", cause unavailable (notRecorded)\n", MachineDiagnosisViewModel.Format(snapshot, "Laptop"));
+    }
+
     static DiagnosticsSnapshot Snapshot(DateTimeOffset started, DiagnosticsReadiness readiness) => new(DiagnosticsProtocol.Schema, started.AddSeconds(5),
         new DiagnosticsHost(null, false, started, 5, DiagnosticsMissing.Invalid),
         new DiagnosticsRestart(started, DiagnosticsMissing.NotRecorded),

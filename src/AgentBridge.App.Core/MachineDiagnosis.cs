@@ -193,7 +193,7 @@ public sealed class MachineDiagnosisViewModel : Observable
         {
             $"{Product.Name} diagnostics · {name} · {At(d.At)}",
             $"host: {Version(d.Host.Version, d.Host.VersionMissing)}{(d.Host.Dev ? " (dev)" : "")}, started {At(d.Host.StartedAt)}, up {Math.Max(0, d.Host.UptimeSeconds)}s",
-            $"last restart: {(d.LastRestart.At is { } r ? At(r) : Unavailable(DiagnosticsMissing.NotRecorded))}, cause {(d.LastRestart.CauseMissing is { } c ? Unavailable(c) : "unknown")}",
+            $"last restart: {(d.LastRestart.At is { } r ? At(r) : Unavailable(DiagnosticsMissing.NotRecorded))}, cause {(d.LastRestart.Cause is { } cause ? Code(cause) : d.LastRestart.CauseMissing is { } c ? Unavailable(c) : "unknown")}",
             $"relay: {(d.Relay.Missing is { } rm ? Unavailable(rm) : Code(d.Relay.State))}{(d.Relay.Since is { } since ? $" since {At(since)}" : "")}",
             $"read-only: {(d.Holds.ReadOnlyMissing is { } om ? Unavailable(om) : d.Holds.ReadOnly is { } ro ? Code(ro) : Unavailable(null))}",
             $"discovery held: {(d.Holds.DiscoveryMissing is { } dm ? Unavailable(dm) : Held(d.Holds.DiscoveryHeld))}",

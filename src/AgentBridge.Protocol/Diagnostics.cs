@@ -92,8 +92,14 @@ public enum DiagnosticsAgentId { Other, Copilot, Claude, Codex }
 public sealed record DiagnosticsHost([property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Version, bool Dev, DateTimeOffset StartedAt, long UptimeSeconds,
     DiagnosticsMissing? VersionMissing = null);
 
-// The last restart is this process's start; why it restarted is not recorded yet (#802).
-public sealed record DiagnosticsRestart([property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? At, [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] DiagnosticsMissing? CauseMissing);
+// The last restart is this process's start. Cause is why, when the host that left recorded it (a planned restart: asked in the app, asked from a
+// person's device, or by the departure watchdog); otherwise it is null with CauseMissing notRecorded (a crash, a reboot or a stop by hand leave no record, #1964).
+public sealed record DiagnosticsRestart([property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? At, [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] DiagnosticsMissing? CauseMissing,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] DiagnosticsRestartCause? Cause = null);
+
+// Unknown: a newer host's cause this client does not know.
+[UnknownAs(Unknown)]
+public enum DiagnosticsRestartCause { Unknown, App, Device, Watchdog }
 
 public sealed record DiagnosticsRelay(DiagnosticsRelayState State, [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? Since, DiagnosticsMissing? Missing = null);
 

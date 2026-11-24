@@ -457,7 +457,16 @@
           "name": "this-process",
           "json": {
             "at": "2026-10-28T02:22:43.182Z",
-            "causeMissing": "notRecorded"
+            "causeMissing": "notRecorded",
+            "cause": null
+          }
+        },
+        {
+          "name": "a-planned-restart",
+          "json": {
+            "at": "2026-10-28T02:22:43.182Z",
+            "causeMissing": null,
+            "cause": "watchdog"
           }
         }
       ],
@@ -749,7 +758,8 @@
             },
             "lastRestart": {
               "at": "2026-10-28T02:22:43.182Z",
-              "causeMissing": "notRecorded"
+              "causeMissing": "notRecorded",
+              "cause": null
             },
             "relay": {
               "state": "connected",
@@ -849,7 +859,8 @@
             },
             "lastRestart": {
               "at": "2026-10-28T02:22:43.182Z",
-              "causeMissing": "notRecorded"
+              "causeMissing": "notRecorded",
+              "cause": null
             },
             "relay": {
               "state": "unknown",
@@ -899,7 +910,8 @@
             },
             "lastRestart": {
               "at": "2026-10-28T02:22:43.182Z",
-              "causeMissing": "notRecorded"
+              "causeMissing": "notRecorded",
+              "cause": null
             },
             "relay": {
               "state": "connected",
@@ -995,7 +1007,8 @@
             },
             "lastRestart": {
               "at": "2026-10-28T02:22:43.182Z",
-              "causeMissing": "notRecorded"
+              "causeMissing": "notRecorded",
+              "cause": null
             },
             "relay": {
               "state": "connected",
