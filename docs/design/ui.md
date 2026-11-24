@@ -1814,7 +1814,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   steps are final view changes, and rows realised taller than estimated otherwise bounced the bar back up.
   Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
   A wheel notch owns the view from its input, before its first view change arrives, so no correction
-  cancels it in flight; a wheel that moves nothing lets go after 250 ms (#4243).
+  cancels it in flight; a wheel event that raises no view change lets go after 250 ms (#4243). A wheel
+  turned toward the edge the view is already at (down at the end) leaves the pin and the view alone, so a
+  reply streaming in is still followed (#4313).
   The person's own scroll landing on the very end (wheel, arrow, key) re-engages the pin (#4243).
   End-following also waits while a finger is down or the pointer is over or pressed in the
   conversation, then follows the latest measured end when the last hold ends, if still pinned;

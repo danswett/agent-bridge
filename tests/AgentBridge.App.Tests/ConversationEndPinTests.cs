@@ -541,7 +541,8 @@ public sealed class ConversationEndPinTests
         if (state != "unheld") { view.FollowState.PointerOver(7); }
         view.SwitchForProbe();
         if (state == "ended") { view.FollowState.PointerLeft(7); }
-        if (state == "navigation") { view.Scroller.Wheel(); }
+        // Opened at the top: a wheel turned up there moves nothing (#4313), so the person's move is turning it down.
+        if (state == "navigation") { view.Scroller.Wheel(-120); }
         view.DrainForProbe();
         view.Follow();
         if (state == "navigation") { Assert.Empty(view.Scroller.Targets); }
