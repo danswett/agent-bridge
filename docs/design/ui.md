@@ -2035,13 +2035,22 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   window and announcements (the owner's #600 decision, below). As §6.4's "While an answer
   goes" says, the ring is on Send answer, and the chosen value stays selected and read-only.
   No client draws a ring on an option.
-- **Phone: one line at rest (#935, the owner, 2026-11-05).** Below 760 the box starts at one
-  line, 52 tall, with Attach before the text and Send after it, as the native composers do. It
-  grows a line at a time to six lines of text, then scrolls inside.
+- **Phone: three lines when expanded (the owner, 2026-11-23 about 23:30 PT, relayed by the
+  Chief; was one line at rest, #935, 2026-11-05).** The owner: "It's supposed to collapse when
+  scrolling to make more space, but the expanded version isn't tall enough. I think it should be
+  [three] lined to fill the space." Below 760 the expanded box is three lines of text, 100 tall
+  (the text 92), with Attach before the text and Send after it, both at its foot, as the native
+  composers do. The stylesheet holds the three lines from the first paint, so no frame is
+  shorter and nothing changes height after layout to move the conversation: the box's height is
+  never a scroll, so a wheel or a trackpad moves the conversation exactly as far as it says
+  (#4243). It grows a line at a time from the fourth to six lines of text (164), then scrolls
+  inside. Only a phone with less room than three lines (a short screen with the keyboard up)
+  lowers it, to what is there. The collapse is unchanged: reading away from the end still folds
+  the area to its 48 bar, and that is the intended look, not a missing control.
 - **While a question waits** (§5.3), one line above the box in `needs` text: "Answer its
   question first. Go to the question". The link is a scroll the app makes to the question
   (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
-  the reply area is 99 at rest on a phone.
+  the reply area is 147 at rest on a phone.
 - **While its machine is offline** (§6.1, #950 rule 8), the box says why in text2, in place of
   its usual actions: "*machine* is offline · you can answer once it's back". Focus on a control it
   replaces moves to the line (§6.1, rule 8). During a return's hold, its controls are held as
