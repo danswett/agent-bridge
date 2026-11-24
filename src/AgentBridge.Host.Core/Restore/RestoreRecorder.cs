@@ -957,6 +957,16 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         }
     }
 
+    // What this host recorded a session was launched with, live or gone, by its id (a resume in place, #4318); none when unknown.
+    public RestoreLaunch? RecordedLaunch(string id)
+    {
+        lock (gate)
+        {
+            if (live.TryGetValue(id, out var entry) && LaunchOf(entry) is { } now) { return now; }
+            return launched.TryGetValue(id, out var l) ? l : owed.Select(w => w.Entry).Concat(said.Select(w => w.Entry)).FirstOrDefault(e => e.Id == id)?.Launch;
+        }
+    }
+
     // What a session's restore resumes it with: what this host launched it with, else nothing (the
     // machine's defaults, asking permission).
     RestoreLaunch? LaunchOf(RestoreEntry entry) => entry.Launch ?? (launched.TryGetValue(entry.Id, out var l) ? l : null);

@@ -31,7 +31,7 @@ folder a person approved at that machine, with an agent and model that machine o
 opening prompt up to 16 KiB. It sees whether the launch started and the new session's id.
 
 **What an agent can never do:** launch with Allow all; resume or bring over an existing
-session; launch on another machine (until device approval, #55, lands); pick a folder, flag or
+session (the one exception: a coordinator resumes a fleet worker in place with `fleet.resume`, owner decision Nov 23, [agent-resume.md](agent-resume.md)); launch on another machine (until device approval, #55, lands); pick a folder, flag or
 setting the machine does not offer; answer the new session's folder-trust or permission
 questions; give the new session more rights than it has. A session an agent starts can read,
 and cannot launch anything itself.
@@ -66,7 +66,7 @@ and cannot launch anything itself.
 5. Other machines: **this machine only** until device approval (#55). Meanwhile the
    dispatcher still decides centrally, and a small launcher on each machine starts its own
    workers.
-6. Sessions an agent starts: **read only, cannot launch, cannot be resumed by agents** (fleet
+6. Sessions an agent starts: **read only, cannot launch, cannot be resumed by agents except a coordinator's `fleet.resume`** (fleet
    workers may also send messages, so they can report back).
 7. Audit: **launches in a file of their own, kept 30 days or 16 MiB on each machine, no prompt
    text**, readable in the app and by a command.
@@ -195,7 +195,7 @@ Checked by `AgentLaunchGate` before the launch service sees it:
 | machine | **this machine only**: local pipe only; neither `LaunchRequest` nor v1-launch.md's `session.launch` request table has a machine field. Other agent-launch channels are refused | Cross-machine waits for #55 (§9) |
 | `permissions` | **must be present and `ask`**. Absent or `allowAll` is refused | Absent takes `defaults.permissions`, possibly `allowAll` (v1-launch.md, `session.launch` field table) |
 | `transfer` | refused | Transfers need a person (agent-principals.md §5.2) |
-| `resume` | **refused in v1** | Resuming types an agent's prompt into an existing conversation, possibly a person's; new sessions only keeps it simple |
+| `resume` | **refused in a launch request; only a coordinator's `fleet.resume` (agent-resume.md)** | Resuming types an agent's prompt into an existing conversation, possibly a person's; new sessions only keeps it simple |
 | `attachments` | refused | `attachment.*` is already refused for agents (`LocalApi.Acts`, `Handler`) |
 | `workspace` | required, must be on the machine's `agents.launch.workspaces` list (labels a person ticked "agents may launch here", default empty), and must be an isolated workspace, so each launch gets a fresh worktree. **The new worktree must hold none of the chosen agent's project configuration** (the worktree check, §2): presence alone refuses, whatever the contents, so it is an allow-list of "clean", not a deny-list of bad settings | A folder a person approved at that machine for this purpose. Without the check an agent could plant settings (Claude's `.claude/` can set a bypass default mode, hooks, an API key helper or MCP servers) and then launch over them |
 | `agent` | required, from `launch.options`, on `agents.launch.agents`; `auto` and Agency refused; only an agent with a confirmed project-configuration list (below) | Agency adds profile config the host cannot show keeps ask (agent-principals.md §5.2, "Launch rules for agents") |

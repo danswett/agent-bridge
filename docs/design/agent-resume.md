@@ -35,9 +35,12 @@ this machine). A caller is a coordinator only when its own session's recorded ro
 list, so resume is off until the person lists the roles (fail closed; setting `agents.resume.roles` is the owner's step); a caller with no recorded role, or one launched by a
 person without a role, is refused. No name, title or fleet-name lookup is ever used.
 
-A role is recorded only by a PERSON launch, or by a coordinator launching within its own role (the launch's role must equal
-the role the launching session was itself recorded with). A session can never set or raise its own role, and a builder
-launch can never record a coordinator role: an agent launch naming any other role records none. Both are tests.
+A role is recorded only by a PERSON launch. The owner decision above, item 2, says NEW coordinator sessions still need the
+owner's direct approval and only EXISTING sessions may be resumed or restarted, so an agent never records a coordinator
+role on a new child launch (not even a coordinator launching a child with its own role; the launch itself is not refused,
+since workers legitimately name a worker role such as `default`, it just records none). The one way a role survives an
+agent's action is the same session resumed in place, which keeps the role its own earlier record carries (also across a
+reboot restore). A session can never set or raise its own role. Each is a test.
 
 **Known limit:** sessions launched before this ships have NO recorded role, so nobody can resume them by this op (fail
 closed) until they are relaunched; the owner resumes those by hand meanwhile.
@@ -49,7 +52,7 @@ closed) until they are relaunched; the owner resumes those by hand meanwhile.
    matched by session id alone (a new `WasFleetLaunched`); an unfinished or unreadable record refuses (fail closed).
 2. **Refused:** an unknown id; a session only a person launched; any session another person's host record names (nothing
    crosses people: this host's record is one person's); a derived (16-hex) id; a session already running (`running`; no
-   force, no kill-and-restart, stop it first); the caller's own session; a kill switch, read-only host or excluded session.
+   force, no kill-and-restart, stop it first); the caller's own session; a kill switch, read-only host, excluded caller, session, fleet name or workspace (the lists fleet.end honours), or a workspace not approved.
 3. **Never wider than the original.** The resume uses the settings the host recorded when the session was launched
    (agent, profile, model, effort, context, and permissions as launched), never anything the caller supplies, and never
    wider: a setting the machine no longer offers falls back to its default, and settings that cannot be read refuse the
@@ -58,13 +61,28 @@ closed) until they are relaunched; the owner resumes those by hand meanwhile.
    PT: "every fleet launch is `Allow all`"; Nov 15: every launched session explicitly uses `Allow all`; pipeline-rules.md
    line 93). So a resumed Allow-all builder stays Allow-all and can work unattended; a session launched under Ask resumes
    under Ask.
-4. **Counts as a launch.** It takes a live-launch slot under the same agent limits as a launch, and frees it when the
-   session ends, so resumes cannot exceed the cap.
-5. **Logged and audited.** One audit row per request under the agent's principal and chain (`fleet.resume`: session,
-   outcome, closed reason code), a host log line, and a durable intent row first, so a repeat of the same request id returns
-   what was recorded and never resumes twice.
+4. **No double launch (live-limit slot NOT built).** A session already running refuses (`running`), the launcher's one-start-per-session guard and
+   single-launch gate hold, and one request id resumes once. **Known limit (follow-up):** a resume does not yet take a slot
+   under the host's live agent-launch limit; the shared builder cap (26) is the dispatcher's, outside the host.
+5. **Logged and audited (durable intent row NOT built).** One audit row per request under the agent's principal and chain (`fleet.resume`: session,
+   outcome, closed reason code) and a host log line. A repeat of a request id returns the first answer from memory and
+   resumes nothing twice; after a host restart the session is simply running, which refuses. (No durable intent row: the
+   resume is not an op the gate audit knows; a follow-up if Quality wants it.)
 6. **Receipt.** `{request, outcome: resumed | refused | unconfirmed, reason?, session}`. Closed reasons reuse the fleet set
-   (`scope`, `policy`, `kill-switch`, `bad-argument`, `duplicate-id`, `audit-unavailable`) plus `running`.
+   (`scope`, `policy`, `kill-switch`, `bad-argument`, `audit-unavailable`) plus `running` and `busy`; a launcher failure is
+   `unconfirmed` / `failed`.
+
+## Known limits (not built in this change)
+
+- **Rule 4's live-limit slot.** A resume does not take a slot under the host's live agent-launch limit: that gate is tied to the
+  person-launch policy and is a follow-up. Double launches are still prevented (a running session refuses, one start per
+  session, one request id resumes once); the shared builder cap (26) is the dispatcher's, outside the host.
+- **Rule 5's durable intent row.** A repeat of a request id is answered from memory; after a host restart the session is simply
+  running, which refuses. Not an op the gate audit knows; a follow-up if Quality wants it.
+- **Sessions launched before this ships have no recorded role,** so nobody can resume them by this op (fail closed) until
+  they are relaunched by a person; the owner resumes those by hand meanwhile.
+- **`agents.resume.roles` is the owner's step:** empty (the default) means resume is off.
+- **No new coordinators:** a coordinator session is only ever started by a person (owner decision, item 2).
 
 ## Defaults taken (owner CHANGE if wrong)
 

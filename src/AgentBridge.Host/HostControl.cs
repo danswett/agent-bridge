@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Lite;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -215,14 +216,20 @@ public sealed class HostControl
     HostSettingsView Configured()
     {
         var (settings, _) = HostSettings.Load(options.Folder);
-        return Settings(settings, HostConfigFile.ReadName(options.Folder));
+        return Settings(settings, HostConfigFile.ReadName(options.Folder), options.Folder);
     }
 
-    bool NeedsRestart(HostSettingsView now) => now != (Volatile.Read(ref running) with { FleetLaunchRule = now.FleetLaunchRule });
+    bool NeedsRestart(HostSettingsView now) => now != (Volatile.Read(ref running) with { FleetLaunchRule = now.FleetLaunchRule, AgentMessagingScope = now.AgentMessagingScope, AgentMessagingOffBy = now.AgentMessagingOffBy });
 
-    public static HostSettingsView Settings(HostSettings settings, string? name) =>
-        new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake,
-            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare, settings.FleetLaunchRule);
+    // The messaging scope is the effective one: a recorded kill (the epoch file) with no agentMessaging.remote own-account keeps messaging
+    // dead whatever the config says, so it is reported off with the reason, never as on (the folder is only unknown in the running copy at start).
+    public static HostSettingsView Settings(HostSettings settings, string? name, string? folder = null)
+    {
+        var killed = folder is not null && settings.AgentMessaging.RemoteEnabled && !LiteKill.IsOn(folder, settings.AgentMessaging);
+        return new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake,
+            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare, settings.FleetLaunchRule,
+            killed ? "off" : settings.AgentMessaging.Scope, killed ? "kill" : null);
+    }
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -337,6 +344,16 @@ public sealed class HostControl
 
     SettingsResult SettingsLocked(SettingsRequest request, List<string>? devices)
     {
+        // The scope asked for is the one in force (a kill counts): nothing is written and nothing is logged for it.
+        if (request.AgentMessagingScope is { } sameScope && Configured().AgentMessagingScope == sameScope)
+        {
+            request = request with { AgentMessagingScope = null };
+            if (request == new SettingsRequest() && devices is null)
+            {
+                var unchanged = Configured();
+                return new SettingsResult(unchanged, NeedsRestart(unchanged));
+            }
+        }
         // Made from a list that is no longer the one saved: nothing is changed, and the caller
         // reads the list again and makes its change from that.
         if (devices is not null && request.RemoteFolderTrustDevicesWas is { } was && Configured() is var before
@@ -349,15 +366,22 @@ public sealed class HostControl
         // read back as asked: a file the host rejects for another setting reads as all defaults,
         // keep-awake off, so the reply would say off while the service ran, and the next start
         // would turn it off with nothing said. Refused instead, the file as it was.
-        Action<string, string>? check = request.DevBoxKeepAwake is not null || request.FleetLaunchRule is not null ? (path, text) =>
+        Action<string, string>? check = request.DevBoxKeepAwake is not null || request.FleetLaunchRule is not null || request.AgentMessagingScope is not null ? (path, text) =>
         {
             var (saved, problem) = HostSettings.Parse(text, path);
-            var setting = request.DevBoxKeepAwake is not null ? "Dev Box keep-awake" : "Fleet launch name rule";
+            var setting = request.DevBoxKeepAwake is not null ? "Dev Box keep-awake" : request.AgentMessagingScope is not null ? "Agent messaging scope" : "Fleet launch name rule";
             if (problem is not null) { throw new InvalidOperationException($"{setting} was not changed: {problem}; fix config.json first"); }
             if (request.DevBoxKeepAwake is { } want && saved.DevBox.KeepAwake != want) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {path} would not read back as {(want ? "on" : "off")}; fix its devBox section first"); }
             if (request.FleetLaunchRule is { } rule && saved.FleetLaunchRule != rule) { throw new InvalidOperationException($"Fleet launch name rule was not changed: {path} would not read back as {rule}"); }
+            if (request.AgentMessagingScope == "same-person" && saved.AgentMessaging.RemoteEnabled && !LiteKill.IsOn(options.Folder, saved.AgentMessaging)) { throw new InvalidOperationException("Agent messaging scope was not changed: a kill is recorded and agentMessaging.remote is not own-account, so messaging would stay off; only a person at the machine sets it"); }
+            if (request.AgentMessagingScope is { } scope && saved.AgentMessaging.Scope != scope) { throw new InvalidOperationException($"Agent messaging scope was not changed: {path} would not read back as {scope}; a turned-off agentMessaging.remote (a kill) keeps it off until a person turns that back on"); }
         } : null;
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, request.PhoneSignIn, request.FleetLaunchRule);
+        try { HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, request.PhoneSignIn, request.FleetLaunchRule, request.AgentMessagingScope); }
+        catch (Exception e) when (request.AgentMessagingScope is not null && e is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            log($"agent messaging scope not changed by the app: {e.Message}");
+            throw;
+        }
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
@@ -379,6 +403,7 @@ public sealed class HostControl
         }
         log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.DevBoxKeepAwake is { } k ? $"; Dev Box keep-awake {(k ? "on" : "off")}" : "")}{(request.PhoneSignIn is { } p ? $"; sign-in from devices {(p ? "on" : "off")} at the next start" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         if (request.FleetLaunchRule is { } launchRule) { log($"fleet name launch rule changed by the app: {launchRule}"); }
+        if (request.AgentMessagingScope is { } messagingScope) { log($"agent messaging scope changed by the app: {messagingScope}"); }
         var now = Configured();
         Changed();
         return new SettingsResult(now, NeedsRestart(now));

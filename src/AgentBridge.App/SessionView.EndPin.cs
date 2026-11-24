@@ -120,19 +120,30 @@ public sealed partial class SessionView
     void WheelTurned(ScrollViewer scroll, int delta)
     {
         if (delta < 0 && scroll.VerticalOffset >= scroll.ScrollableHeight - 0.5 || delta > 0 && scroll.VerticalOffset <= 0.5) { return; }
-        WheelInput();
+        WheelInput(towardEnd: delta < 0);
     }
 
-    void WheelInput()
+    // The layout, not the reader, left the view one viewport short of an end it had reached, while the wheel or a pan
+    // (which released the pin) was bringing it there: the end is still the destination until the reader turns away (#4243).
+    bool endLost;
+
+    void WheelInput(bool towardEnd)
     {
         wheelStarting = true;
         var input = ++wheelInputs;
+        var lost = endLost && towardEnd;
         ReleasePin();
+        endLost = lost;
         wheelLapse?.Stop();
         wheelLapse = DispatcherQueue.CreateTimer();
         wheelLapse.Interval = WheelStart;
         wheelLapse.IsRepeating = false;
-        wheelLapse.Tick += (_, _) => { if (input == wheelInputs) { wheelStarting = false; } };
+        wheelLapse.Tick += (_, _) =>
+        {
+            if (input != wheelInputs) { return; }
+            wheelStarting = false;
+            if (endLost) { FollowPinnedEnd(); }
+        };
         wheelLapse.Start();
     }
 
@@ -148,6 +159,7 @@ public sealed partial class SessionView
         scrollbarPointers.Clear();
         (stationaryRemeasure, stationaryChange) = (0, 0);
         stationaryFromEnd = false;
+        endLost = false;
     }
 
     (double Offset, double Extent)? seen;
@@ -180,6 +192,13 @@ public sealed partial class SessionView
         wheelStarting = false;
         RememberStillExtent(scroll);
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
+        // The view was at the end and the extent was remeasured, and the view lands one viewport short of the new end: the
+        // list's own landing, whatever the pin (a wheel or pan under way has released it). A reader's move back from the end
+        // that is not a remeasure's, or that is a key's or a scrollbar's, is not this. The first view change at the end clears it.
+        if (seen is { } at && (at.Offset >= at.Extent - ConversationFollow.EndFollowSlack || stationaryFromEnd) && offset < at.Offset - 8
+            && Math.Max(Math.Abs(extent - at.Extent), stationaryRemeasure) > 8 && Math.Abs(extent - offset - scroll.ViewportHeight) <= 8
+            && keyTarget is null && scrollbarPointers.Count == 0 && navigationPending is null) { endLost = true; }
+        if (offset >= extent - 0.5) { endLost = false; }
         // Native measure/arrange can coerce the offset before returning to the UI dispatcher.
         // Only that synchronous layout owns these moves; reader input still releases directly.
         if (conversationLayoutDepth == 0 && (pinEnd || anchoring is { } pending && Math.Abs(pending - extent) <= ConversationFollow.EndFollowSlack) && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
@@ -216,7 +235,7 @@ public sealed partial class SessionView
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin([System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
     {
-        restoreReading = null; pinEnd = false; pinCoerced = false; navigationPending = null; anchoring = null; stationaryRemeasure = stationaryChange = 0; stationaryFromEnd = false; pinReleases++;
+        restoreReading = null; pinEnd = false; pinCoerced = false; endLost = false; navigationPending = null; anchoring = null; stationaryRemeasure = stationaryChange = 0; stationaryFromEnd = false; pinReleases++;
         RecordPin(pinReleased, $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen} layoutDepth={conversationLayoutDepth}");
         SyncConversationAnchoring();
         if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
@@ -231,8 +250,8 @@ public sealed partial class SessionView
     {
         if (ConversationScroll is { } still) { RememberStillExtent(still); }
         SyncConversationAnchoring();
-        if (follow.Held && !pinCoerced || scrollbarPointers.Count > 0 || panning || ReaderScrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
-        if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
+        if (follow.Held && !pinCoerced && !endLost || scrollbarPointers.Count > 0 || panning || ReaderScrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
+        if (ConversationEndPin.Correction(pinEnd || endLost, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
 
     // After a layout under a still view, the block across the top edge back where it was (ui.md §6.4).

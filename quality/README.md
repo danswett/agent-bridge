@@ -315,6 +315,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    with no proven base (the whole ring runs) records the first parent it diffed from without vouching for it. The record
    comes first, the judges next, and the first-parent shortcut that makes a run rely on its parent last, so nothing
    changes until the judges honour it.
+   The planner honours it too: a passed run is a base for the next run's diff only if every parent it relied on, back to a run that
+   relied on none, passed as well (a parent that failed or was cancelled never tested its change, so that change stays in the next diff);
+   an unreadable record is not proved, so an older base tests more, never less.
 
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass
@@ -612,6 +615,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      A run with no creation time is never skipped. The newest readable run is then judged, so a newer readable failed run still blocks.
      The gh call itself asks once more when gh reports a truncated response ("unexpected end of JSON input") or an empty body, and a
      failure says what gh said and how often it was asked; a 404 or other clean status, and every status post, are asked once.
+     **A run that relied on a parent is green only if that parent is (#2454, item A).** A main run's plan job records `plan-base: base=<sha>
+     relied-parent=<sha|none>`; a run whose record names an in-flight parent counts green only if that parent, and the parent it relied on, back
+     to a run that relied on none, is green by this same rule. A parent that failed, was cancelled, was skipped, has no CI run, or is still
+     running after 2 hours (a zombie: treated as failed) keeps main red even though the child passed, and a later run whose base covers that
+     change (it relies on nothing, or on a green run) clears it. A parent that main's recent runs do not hold is red too, and so is a chain
+     of more than 20 parents. A parent still running within 2 hours is no verdict yet: a run that is green by its own jobs is passed over for
+     an older one, like a run still going, but a run that is red by its own jobs holds main red. A run with no record relied on nothing only
+     if it is older than `main_green.reliance_record_from` (unset: always); from that time on a missing record is an error, since the
+     annotation may not have landed. A record that is not in the shape, a second record on one run, or an unreadable one is an error, as
+     unreadable jobs are.
      A candidate needs a successful completed plan and completed product instances;
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running

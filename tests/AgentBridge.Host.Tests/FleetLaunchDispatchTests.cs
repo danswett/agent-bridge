@@ -95,4 +95,28 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         var rows = File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(profile, "audit"), "launches-*.jsonl")));
         Assert.All(rows.Skip(1), row => Assert.Equal("fleet", JsonDocument.Parse(row).RootElement.GetProperty("grant").GetString()));
     }
+
+    // #4318: the role a fleet launch records goes through RoleFor, never the request's own role: a launch by an agent (or script)
+    // that is not itself recorded with that role records none, so no builder or dispatcher can mint a coordinator.
+    [Theory]
+    [InlineData("script:machine/dispatcher")]
+    [InlineData("agent:machine/55555555-5555-4555-8555-555555555555")]
+    public async Task A_fleet_launch_never_records_a_role_its_launcher_was_not_itself_recorded_with(string principal)
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: new AgentCredentials(profile, "machine"),
+            agentWorktreeCheck: (workspace, made, _) => AgentLaunchWorktreeCheck.Check(workspace, made, "claude"));
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude", Workspace = "App",
+            Permissions = LaunchProtocol.AllowAll, Prompt = "fixture", Role = "quality-lead" };
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile),
+            new("local", "agent", principal, null), fleet: true, refusal: () => null);
+
+        Assert.True(result.Outcome == LaunchOutcome.Started, result.Reason);
+        Assert.Null(launcher.LaunchRole(result.Session!));
+    }
 }

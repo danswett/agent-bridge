@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Lite;
@@ -59,9 +60,11 @@ public sealed class LiteKill : ILiteMode
     // The same answer for a one-shot reader (a command at the machine, a post-check) that has none of a running host's state, and no side
     // effect: a kill record that is there but unreadable, not a file, or held means off; once a kill is recorded only an explicit
     // remote own-account counts, never the default or a scope; no record at all is the default. Anything unclear is off. Quality's P2 on #4316.
-    public static bool IsOn(string folder)
+    public static bool IsOn(string folder) => IsOn(folder, HostSettings.CurrentAgentMessaging(folder));
+
+    // The same, for settings the caller already holds (a file about to be saved, or one read once for several answers).
+    public static bool IsOn(string folder, AgentMessagingSettings settings)
     {
-        var settings = HostSettings.CurrentAgentMessaging(folder);
         if (!settings.RemoteEnabled) { return false; }
         var path = Path.Combine(folder, FileName);
         try

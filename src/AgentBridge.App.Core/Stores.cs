@@ -152,6 +152,12 @@ public sealed record AppPreferences
     public static UpdateWhenReady DefaultWhenReady => UpdateWhenReady.RestartToUpdate;
     [JsonIgnore]
     public UpdateWhenReady WhenReady => WhenUpdateReady ?? DefaultWhenReady;
+    // The update window (#4468, owner Nov 24 ~08:15 PT: "Window 02:00-05:00 PT"): what installs unasked, Install between
+    // turns and the host's version heal, goes only between these local times (HH:mm) in this time zone; a person's press
+    // never waits for it. Unset, each is InstallWindow's default, so a later default reaches every machine nobody set.
+    public string? InstallWindowStart { get; init; }
+    public string? InstallWindowEnd { get; init; }
+    public string? InstallWindowZone { get; init; }
     // Set just before an update is applied, and cleared by the new version's first start, which
     // announces it: the version updated from, and the new one's release notes.
     public string? UpdatedFrom { get; init; }

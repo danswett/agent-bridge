@@ -111,14 +111,20 @@ public sealed partial class SessionView
             if (!e.IsIntermediate)
             {
                 anchoring = null; keyTarget = null; CompleteNavigation();
-                if (pinEnd) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
+                if (pinEnd || endLost) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
             }
             HistoryScrolled(e.IsIntermediate);
             if (!e.IsIntermediate) { SaveReading(); }
             SyncConversationAnchoring();
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
-        scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
+        scroll.DirectManipulationCompleted += (_, _) =>
+        {
+            panning = false;
+            follow.PanEnded();
+            // The pointer over the conversation keeps the hold, so no HoldEnded follows: a landing short of the end is put back here.
+            if (endLost) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
+        };
         HookConversationInput(scroll);
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
