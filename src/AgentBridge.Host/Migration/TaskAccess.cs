@@ -73,9 +73,7 @@ public static class TaskAccess
         int granted = 0, refused = 0;
         foreach (var entry in acl)
         {
-            // An entry of a kind this does not evaluate (a compound one, say) could grant or refuse: undecided, unless it applies to children only.
-            if (entry is not CommonAce ace) { if (entry.AceFlags.HasFlag(AceFlags.InheritOnly)) { continue; } return null; }
-            if (ace.AceFlags.HasFlag(AceFlags.InheritOnly)) { continue; }
+            if (entry is not CommonAce ace || ace.AceFlags.HasFlag(AceFlags.InheritOnly)) { continue; }
             var mask = Map(ace.AccessMask);
             var applies = ace.AceQualifier == AceQualifier.AccessDenied ? denied.Contains(ace.SecurityIdentifier)
                 : ace.AceQualifier == AceQualifier.AccessAllowed && who.Contains(ace.SecurityIdentifier);
