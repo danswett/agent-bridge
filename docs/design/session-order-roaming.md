@@ -177,7 +177,7 @@ note "*Name* was deleted on another device".
 | Slice | What | Sensitive |
 |---|---|---|
 | S1 | Local order and read records, merge function with vectors, the Sort menu rules above, "Your order, on this device" | no |
-| S2 | Protocol doc and vectors for the sealed records, including groups | yes |
+| S2 | Protocol doc and vectors for the sealed records, including groups: [roaming-records.md](../protocol/roaming-records.md). It measures one marker record at 800 sessions, not §4's 1,500 | yes |
 | S3 | Relay route and limits | yes |
 | S4 | Key creation, wrapping, removal; waits for roster enforcement | yes |
 | S5 | Host `sessions.read` and the #1190 check | yes |
