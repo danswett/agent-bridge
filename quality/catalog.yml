@@ -384,7 +384,10 @@ suites:
     validation_plan: native
     kind: static
     ring: 1
-    select: always
+    select: affected
+    # A change to the plan, or to any test (a new class is a change under tests/), selects product so this runs. quality/** and tools/AgentBridge.Quality/** already select the whole ring (global_triggers).
+    # Not "always": that would make product build the whole solution on every docs-only pull request just to run this.
+    triggers: [quality/test-shards.json, tests/**]
     security_sensitive: true  # a CI gate (AGENTS.md rule 5): it decides whether a test can be silently dropped from the shards
     # S4 (#4104, quality/README.md CI speed): after the build, reads every built test assembly's methods from METADATA only (System.Reflection.MetadataLoadContext: no type loaded,
     # no test code run) and fails unless each runs in exactly one shard of quality/test-shards.json under VSTest's containment rule. A new class that is a look-alike of a listed one

@@ -62,6 +62,20 @@ public sealed class ShardVerifyTests
         return [.. lines.Where(l => l.Length > 0).Select(l => l[..(l.IndexOfAny(['(', '<']) is var cut and >= 0 ? cut : l.Length)]).Distinct().Order(StringComparer.Ordinal)];
     }
 
+    // With the remainder a method cannot run in no shard (the term that keeps it out of the remainder puts it in its own), so the plan cannot produce this; the guard is pinned directly,
+    // so a future change to the plan model cannot turn a dropped test into a pass.
+    [Theory]
+    [InlineData(new int[0], false)]       // runs nowhere: dropped
+    [InlineData(new[] { 2 }, true)]       // exactly one
+    [InlineData(new[] { 1, 3 }, false)]   // twice
+    public void A_method_that_runs_in_no_shard_or_two_is_a_violation_and_exactly_one_is_not(int[] shards, bool fine)
+    {
+        var violation = ShardVerify.Violation("P.Tests", "Ns.Class.Method", shards);
+
+        Assert.Equal(fine, violation is null);
+        if (!fine) { Assert.Contains("Ns.Class.Method would run in shards [" + string.Join(", ", shards) + "], not exactly one", violation, StringComparison.Ordinal); }
+    }
+
     [Fact]
     public void A_new_unlisted_look_alike_of_a_listed_class_runs_in_two_shards_and_is_named()
     {

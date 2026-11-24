@@ -12,8 +12,11 @@ internal static class ShardVerify
 {
     /// <summary>The methods that would run in other than exactly one shard, each with the shards that would run it.</summary>
     public static IReadOnlyList<string> Check(ShardPlanFile plan, string project, IEnumerable<string> methods) =>
-        [.. methods.Select(m => (Method: m, Shards: plan.RunningShards(project, m).ToArray())).Where(x => x.Shards.Length != 1)
-            .Select(x => $"{project}: {x.Method} would run in shards [{string.Join(", ", x.Shards)}], not exactly one")];
+        [.. methods.Select(m => Violation(project, m, [.. plan.RunningShards(project, m)])).OfType<string>()];
+
+    /// <summary>The failure for a method that would run in the given shards, or null when that is exactly one. Zero fails too: a method no shard runs is dropped.</summary>
+    public static string? Violation(string project, string method, IReadOnlyCollection<int> shards) =>
+        shards.Count == 1 ? null : $"{project}: {method} would run in shards [{string.Join(", ", shards)}], not exactly one";
 
     public static int Run(string planFile, IReadOnlyList<string> dlls, TextWriter output, TimeSpan timeout)
     {
