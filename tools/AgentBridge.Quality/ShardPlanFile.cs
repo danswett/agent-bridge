@@ -12,7 +12,16 @@ internal enum ShardRun
     Filtered,
 }
 
-internal sealed record ShardChoice(ShardRun Run, string? Filter = null);
+internal sealed record ShardChoice(ShardRun Run, string? Filter = null)
+{
+    /// <summary>What a shard job reads: <c>none</c> (skip), <c>all</c> or the filter. Never empty text: <c>dotnet test --filter ""</c> is NO filter and would run the whole project.</summary>
+    public string Describe() => Run switch
+    {
+        ShardRun.None => "none", ShardRun.All => "all",
+        _ when string.IsNullOrWhiteSpace(Filter) => throw new InvalidOperationException("A filtered shard has no filter text: it must be skipped, not run as no filter."),
+        _ => Filter!,
+    };
+}
 
 /// <summary>
 /// <c>quality/test-shards.json</c> (S4, #4104): what each test shard job runs. Shards 1 to N-1 LIST their classes, per project; shard N is the

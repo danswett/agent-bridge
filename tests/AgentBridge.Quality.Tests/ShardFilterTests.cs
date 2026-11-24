@@ -170,4 +170,30 @@ public sealed class ShardFilterTests
         }
         finally { File.Delete(file); }
     }
+
+    // `dotnet test --filter ""` is NO filter (the whole project): a shard that lists no class of a by-class project must print "none" to be skipped, never empty text.
+    [Fact]
+    public void A_shard_that_lists_no_class_of_a_project_prints_none_never_empty_text()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"shards-{Guid.NewGuid():N}.json");
+        File.WriteAllText(file, """{ "shards": 4, "projects": { "P.Tests": { "1": ["AlphaTests"], "3": ["BetaTests"] } } }""");
+        try
+        {
+            var output = new StringWriter();
+
+            Assert.Equal(0, Program.Run(["shard-filter", "--plan", file, "--project", "P.Tests", "--shard", "2"], output));
+
+            Assert.Equal("none", output.ToString().Trim());
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_filtered_choice_with_no_filter_is_refused_not_printed_as_no_filter(string? filter)
+    {
+        Assert.Throws<InvalidOperationException>(() => new ShardChoice(ShardRun.Filtered, filter).Describe());
+    }
 }
