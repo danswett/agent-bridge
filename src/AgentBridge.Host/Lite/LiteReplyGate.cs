@@ -62,7 +62,8 @@ public static class LiteComposition
             lane = new LaneComposition(currentSettings, modeOn, gate, replier, LaneScreens.Create(source, injector, TimeProvider.System), folder, log);
             pump = new DeliveryDispatchPump(lane, source, log);
         }
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue, BusyStore = new BusyQueueStore(TimeProvider.System), Composition = lane, Pump = pump };
+        var busyStore = new BusyQueueStore(TimeProvider.System);
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue, BusyStore = busyStore, Watcher = new BusyQueueWatcher(busyStore, TimeProvider.System), Composition = lane, Pump = pump };
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)

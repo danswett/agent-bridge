@@ -40,6 +40,8 @@ public sealed class LiteDeliver(
     internal Func<bool>? ClaudeBusyQueue { get; init; }
     // Memory-only status of busy-Claude sends and the depth cap; used only with ClaudeBusyQueue on.
     internal BusyQueueStore? BusyStore { get; init; }
+    // Watches held sends for the prompt Claude takes, up to the 120 s watch; null means no active watch (a taken prompt is still found when the slot is next checked).
+    internal BusyQueueWatcher? Watcher { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 
@@ -205,6 +207,8 @@ public sealed class LiteDeliver(
                     if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); } else { store.Release(body.Request, peer); }
                     break;
             }
+            // Queued and unconfirmed sends stay held: watch for the prompt Claude takes, up to the 120 s watch (D2b-2b2).
+            if (store.Get(body.Request, peer) is { Held: true }) { _ = Watcher?.Start(body.Request, peer); }
         }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }
