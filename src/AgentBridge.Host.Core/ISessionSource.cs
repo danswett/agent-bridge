@@ -108,6 +108,10 @@ public interface ISessionSource : IAsyncDisposable
     // tells it from a later process given the same id before the next discovery pass
     // notices. Null when the session has gone or the source cannot say.
     SessionProcess? ProcessOf(string id) => null;
+
+    // Whether the session left because its own agent said it ended (a Codex SessionEnd hook), as the source removed it: a clean end the host can see
+    // (docs/design/session-watch.md, R3). False for one that simply vanished, and for an agent with no such signal.
+    bool EndedByHook(string id) => false;
 }
 
 public sealed record SessionProcess(int Id, DateTimeOffset? StartedAt);

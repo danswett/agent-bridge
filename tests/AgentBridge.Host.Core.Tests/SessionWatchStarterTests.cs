@@ -19,7 +19,7 @@ public class SessionWatchStarterTests
         var touched = new List<string>();
         var handle = SessionWatchStarter.Start(() => false,
             () => { touched.Add("snapshot"); return [Stuck("a")]; }, () => { touched.Add("held"); return false; }, _ => { touched.Add("owner"); return null; },
-            (_, _) => touched.Add("notify"), () => { touched.Add("clock"); return T; }, _ => touched.Add("log"),
+            _ => { touched.Add("ended"); return false; }, (_, _) => touched.Add("notify"), () => { touched.Add("clock"); return T; }, _ => touched.Add("log"),
             _ => { touched.Add("wait"); return Task.CompletedTask; }, CancellationToken.None);
 
         Assert.Null(handle);
@@ -32,7 +32,7 @@ public class SessionWatchStarterTests
     {
         var sent = new List<(string Title, string Body)>();
         using var cts = new CancellationTokenSource();
-        var handle = SessionWatchStarter.Start(() => true, () => [Stuck("aaaaaaaa-1")], () => false, _ => null,
+        var handle = SessionWatchStarter.Start(() => true, () => [Stuck("aaaaaaaa-1")], () => false, _ => null, _ => false,
             (t, b) => sent.Add((t, b)), () => T, _ => { }, _ => { cts.Cancel(); return Task.CompletedTask; }, cts.Token);
 
         Assert.NotNull(handle);
@@ -41,20 +41,38 @@ public class SessionWatchStarterTests
         Assert.Equal(T, handle.Loop.LastPass);
     }
 
-    // docs/design/session-watch.md: "S4 names the exact source for the clean exit before it builds; until then R3 stays off." No source is named yet,
-    // so the started watch must never raise a missing-session notice, even for an owned session that vanishes.
-    [Fact]
-    public async Task R3_is_off_in_the_started_watch_so_an_owned_session_that_vanishes_raises_nothing()
+    // docs/design/session-watch.md, R3 end sources (owner, Nov 23 about 22:42 PT: "A: Alarm unless ended cleanly"): the started watch raises a missing-session
+    // notice for an owned session that vanishes, but ONLY for an agent that can say it ended cleanly (Codex today). A Claude vanish never does.
+    [Theory]
+    [InlineData(AgentKind.Codex, true)]
+    [InlineData(AgentKind.Claude, false)]
+    [InlineData(AgentKind.Copilot, false)]
+    public async Task R3_in_the_started_watch_raises_for_a_vanished_owned_session_only_when_its_agent_has_a_clean_end_signal(AgentKind agent, bool raises)
     {
         var sent = new List<(string Title, string Body)>();
         using var cts = new CancellationTokenSource();
         var passes = 0;
         var handle = SessionWatchStarter.Start(() => true,
-            () => ++passes == 1 ? [Working("aaaaaaaa-1")] : [], () => false, _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111",
+            () => ++passes == 1 ? [Working("aaaaaaaa-1") with { Agent = agent }] : [], () => false,
+            _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111", _ => false,
             (t, b) => sent.Add((t, b)), () => T.AddHours(passes), _ => { }, _ => { if (passes >= 4) { cts.Cancel(); } return Task.CompletedTask; }, cts.Token);
 
         await handle!.Task;
-        Assert.True(passes >= 4);
+        Assert.Equal(raises, sent.Any(s => s.Body.Contains("1 missing")));
+    }
+
+    [Fact]
+    public async Task A_vanish_the_source_saw_end_cleanly_raises_nothing_even_for_codex()
+    {
+        var sent = new List<(string Title, string Body)>();
+        using var cts = new CancellationTokenSource();
+        var passes = 0;
+        var handle = SessionWatchStarter.Start(() => true,
+            () => ++passes == 1 ? [Working("aaaaaaaa-1") with { Agent = AgentKind.Codex }] : [], () => false,
+            _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111", id => id == "aaaaaaaa-1",
+            (t, b) => sent.Add((t, b)), () => T.AddHours(passes), _ => { }, _ => { if (passes >= 4) { cts.Cancel(); } return Task.CompletedTask; }, cts.Token);
+
+        await handle!.Task;
         Assert.Empty(sent);
     }
 

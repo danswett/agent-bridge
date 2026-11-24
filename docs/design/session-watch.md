@@ -52,9 +52,19 @@ and R1, R4 and R5 go to the person only. The watch never guesses an owner.
 `Attention` (for example a sign-in need) is not R1: it does not set `Waiting`, and it already has its own notice.
 The watch never types into a session and never answers or approves a prompt (#1003 is the separate app path).
 
-**R3 end sources.** A session that leaves the snapshot is explained, and not "missing", by a stop-service or `fleet end` audit line, or by a
-clean process exit the session source observed. A normal exit therefore never alarms. A vanish with none of these is R3. S4 names the exact
-source for the clean exit before it builds; until then R3 stays off.
+**R3 end sources (decided).** Owner decision, Nov 23 at about 22:42 PT, relayed by the Chief: "A: Alarm unless ended cleanly (Recommended)". The host
+records the deliberate ends and the clean exits it sees, and anything else alarms. A session that leaves the snapshot is therefore explained, and not
+"missing", by exactly two things:
+1. **A deliberate end**: a stop-service or `fleet end` stop. The session sits in `Ending` until it is gone, and the watch saw that.
+2. **A clean end the host can see**: the CLI's own `SessionEnd` hook, which the session source reads as positive "ended" evidence when it removes the
+   session (`SessionSource.EndedByHook`). The owner's words were "CLI exit code 0", but the host cannot observe an exit code: the source finds sessions by
+   snapshotting processes (`SessionSource`, `ProcessInspector`) and holds no process handle for a CLI. `SessionEnd` is the observable equivalent.
+   Only Codex has the hook installed today.
+
+R3 fires only for an owned session whose agent has such a signal (Codex today). A Claude or Copilot session never raises R3, because it would alarm on every
+normal exit; the log says "no clean-end signal". Adding a `SessionEnd` hook for Claude and Copilot changes their installed hooks, so it is a separate
+decision and slice; until it lands they stay out of R3. R3 also needs the owner record, so it stays quiet until that is hooked in. The watch itself
+stays default off.
 
 ### "Delivered": the signal that exists
 
