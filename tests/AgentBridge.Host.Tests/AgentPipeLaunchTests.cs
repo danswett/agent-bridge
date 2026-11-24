@@ -497,6 +497,21 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Null(replay.Reservation.Target);
     }
 
+    // #2771 (part b), through the real grant path: a grant-launched fleet worker is tracked by the live limit but never listed for idle end.
+    [Fact]
+    public async Task A_grant_launched_fleet_worker_is_never_listed_for_idle_end()
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, _) = Granted(key, source: source);
+        RegistrationEvidence(pipe, source);
+        var result = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Started, result.Result.Outcome);
+        var gate = pipe.Credentials.LaunchGate;
+        gate.ObserveSession(result.Result.Session!, DateTimeOffset.UtcNow.AddHours(-3), personTyped: false);
+        Assert.DoesNotContain(result.Result.Session!, gate.IdleSessions());
+    }
+
     // #2771: a grant launch under 1 GiB free on the profile's disk is refused with diskLow before anything is reserved or started.
     [Fact]
     public async Task Under_1_GiB_free_refuses_a_grant_launch_with_diskLow()

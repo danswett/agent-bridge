@@ -571,4 +571,5 @@ only `read+reply`, and the durable launch audit records `grant: fleet`.
 (`grants issue`, `scripts grant-fleet`) and refuses every fleet launch (a script's and a grant's), with code `diskLow`, and `host.status` shows
 `diskLow: ... MiB free`. Free some space on the profile's drive; the next launch goes through, with no restart. If the free space cannot be read at all
 the launch is **not** refused: it is allowed, the log says so once, and `host.status` shows `disk unknown`. Fleet workers are not ended for idling:
-the 2 hour `agentLaunchedIdleHours` policy covers agent-started sessions the live limit tracks, and a fleet worker is never one of them.
+a grant-launched fleet worker takes a live slot like any agent-started session, but the 2 hour `agentLaunchedIdleHours` policy never lists it
+(`AgentLimits.IdleSessions` skips sessions bound with `fleet`). Ordinary agent-started sessions are still listed.

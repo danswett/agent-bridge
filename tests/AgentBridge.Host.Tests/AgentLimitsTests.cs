@@ -63,8 +63,8 @@ public sealed class AgentLimitsTests
         });
     }
 
-    // #2771: the idle policy (agentLaunchedIdleHours, 2) is for agent-started sessions the live limit tracks. A fleet worker is launched through the
-    // fleet grant, never reserved here, so however long it idles it is never listed to be ended: the pin for "fleet workers are not ended at 2 hours".
+    // #2771: a fleet worker (a grant launch) takes a live slot like any agent-started session, but the idle policy (agentLaunchedIdleHours, 2)
+    // never lists it, however long it idles; an ordinary agent-started session is still listed.
     [Fact]
     public void A_fleet_worker_is_not_ended_at_two_hours_idle()
     {
@@ -72,6 +72,8 @@ public sealed class AgentLimitsTests
         {
             Assert.True(gate.CheckLaunch("agent:m/builder", "r1", "hash").Allowed);
             gate.LaunchStarted("agent:m/builder", "r1", "agent-started");
+            Assert.True(gate.CheckLaunch("agent:m/builder", "r2", "hash").Allowed);
+            gate.LaunchStarted("agent:m/builder", "r2", "fleet-worker", fleet: true);
             gate.ObserveSession("agent-started", now, personTyped: false);
             gate.ObserveSession("fleet-worker", now, personTyped: false);
             now = now.AddHours(3);
