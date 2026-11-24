@@ -29,6 +29,7 @@ public sealed record AgentMessagingSettings
 {
     public const string Off = "off";
     public const string OwnAccount = "own-account";
+    public const string SamePerson = "same-person";
 
     public static readonly AgentMessagingSettings Default = new() { Remote = OwnAccount };
 
@@ -46,6 +47,9 @@ public sealed record AgentMessagingSettings
 
     public bool RemoteEnabled => Remote == OwnAccount;
 
+    // Whom agents may message (the beta scope): the same signed-in person's agents on any of their machines, or nobody.
+    public string Scope => RemoteEnabled ? SamePerson : Off;
+
     public static (AgentMessagingSettings Settings, IReadOnlyList<string> Problems) Read(JsonElement? section)
     {
         var problems = new List<string>();
@@ -61,6 +65,18 @@ public sealed record AgentMessagingSettings
             var value = remote.ValueKind == JsonValueKind.String ? remote.GetString() : null;
             settings = settings with { Remote = value == OwnAccount ? OwnAccount : Off, RemoteSet = true };
             if (value is not (OwnAccount or Off)) { problems.Add($"agentMessaging.remote is not \"{Off}\" or \"{OwnAccount}\", so remote agent messaging is off"); }
+        }
+        // scope (docs/design/beta-messaging.md section 3): "same-person" is an explicit on, "off" is off, and anything else is off and
+        // reported, so a value this build does not know never widens whom agents may message. Off from either key wins.
+        if (s.TryGetProperty("scope", out var scope) && scope.ValueKind != JsonValueKind.Null)
+        {
+            var value = scope.ValueKind == JsonValueKind.String ? scope.GetString() : null;
+            if (value == SamePerson) { settings = settings with { Remote = settings.RemoteSet ? settings.Remote : OwnAccount, RemoteSet = true }; }
+            else
+            {
+                settings = settings with { Remote = Off, RemoteSet = true };
+                if (value != Off) { problems.Add($"agentMessaging.scope is not \"{Off}\" or \"{SamePerson}\", so remote agent messaging is off"); }
+            }
         }
         if (s.TryGetProperty("allowAllTargets", out var all) && all.ValueKind != JsonValueKind.Null)
         {
