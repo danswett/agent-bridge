@@ -328,7 +328,9 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         // Nor once the host has looked again and let the launch go: it was busy again then, when
         // it took the closed agent for one that had handed its session on and was still asking
         // (#416, whenever the question above came after that look).
-        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("closed: a person declined to trust the folder", StringComparison.Ordinal))));
+        // The look is the host's own follow, which runs on the clock's time (#1563): waited for by the clock's progress, not 10 s of wall time, which a loaded
+        // runner can use up before the follow has looked (#4229). It still gives up once the clock has stood still for Patience.
+        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("closed: a person declined to trust the folder", StringComparison.Ordinal))));
         var later = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(later.TryGetProperty("busy", out _));
         Assert.False(later.TryGetProperty("trust", out _));

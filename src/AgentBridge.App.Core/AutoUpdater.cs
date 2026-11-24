@@ -927,7 +927,8 @@ public sealed class AutoUpdater
                 // CheckEvery more.
                 if (checkDue) { (checksHeldUntil, checksHeld, lastCheckAt, lastCheckFailed) = (null, null, null, null); }
             }
-            else { checkDue = checkedAt is null || now - checkedAt >= (hostFailed ? CheckAfterFailedHost : CheckEvery); }
+            // Or one put off while a download or an install was under way: a newer release is looked for as soon as it ends.
+            else { checkDue = checkedAt is null || now - checkedAt >= (hostFailed ? CheckAfterFailedHost : CheckEvery) || updater.CheckDeferred; }
             if (checkNow || checkDue)
             {
                 checkNow = false;
@@ -1037,6 +1038,10 @@ public sealed class AutoUpdater
             if (installing || manager.UpdateUnderWay || Interlocked.Exchange(ref claimed, 1) == 1) { return; }
             try
             {
+                // From here no check or download replaces the package: a check under way finishes first, and if it
+                // did replace it the install is not begun, as before (Stale), then the newer one is offered.
+                using var applying = await updater.ApplyingAsync();
+                if (Stale()) { return; }
                 if (goNow is not null) { await DepartAsync(because); }
                 else { await InstallAsync(because, (go, false)); }
             }
@@ -1370,6 +1375,8 @@ public sealed class AutoUpdater
             await work.WaitAsync();
             held = true;
             if (installing || manager.UpdateUnderWay) { return "an update is already being installed"; }
+            // The release chosen below is the one applied: a newer one found meanwhile waits until this has ended.
+            using var applying = await updater.ApplyingAsync();
             SourceMoved();
             // Downloaded by Settings since the last tick: that is the one to install.
             if (updater.Ready is { } downloaded && downloaded != Pending)
