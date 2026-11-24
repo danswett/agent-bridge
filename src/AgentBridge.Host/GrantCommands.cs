@@ -79,7 +79,7 @@ public static class GrantCommands
                     output.WriteLine($"Confirm this exact grant digest: {digest}");
                     output.Flush();
                     return Console.IsInputRedirected ? null : Console.ReadLine();
-                }, key, output, error);
+                }, key, output, error, disk: new ProfileDisk(folder, log: error.WriteLine));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or CryptographicException
             or HostErrorException or TimeoutException or InvalidOperationException)
@@ -120,7 +120,7 @@ public static class GrantCommands
 
     internal static int Run(string[] args, Func<bool> refused, AgentAuditLog audit, Func<GrantStore> open,
         Func<HostPolicySnapshot> policy, Func<string, string> read, Func<string, string?> confirm,
-        P256KeyPair key, TextWriter output, TextWriter error, TimeProvider? time = null)
+        P256KeyPair key, TextWriter output, TextWriter error, TimeProvider? time = null, ProfileDisk? disk = null)
     {
         int Fail(string message, int code = 4) { error.WriteLine($"refused: {message}"); return code; }
         if (args is not ["grants", "list"] && refused()) { return Deny(args, audit, error); }
@@ -145,6 +145,8 @@ public static class GrantCommands
             return 0;
         }
         if (args is not ["grants", "issue", var file]) { return Fail(Usage, 2); }
+        // Turning the fleet grant on is refused under 1 GiB free on the profile's disk (diskLow, agent-launch-scope.md section 11).
+        if (disk?.Refusal() is { } low) { return Fail(low); }
         var current = policy();
         var parsed = GrantValidator.Parse(read(file), current.Scope);
         if (!parsed.Valid || parsed.Grant is not { ExpiresAt: not null } grant)

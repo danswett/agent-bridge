@@ -53,6 +53,6 @@ public static class NotificationClasses
 
     // The main agent's own latest answer, as PushNotifier reads it for a finished push: the
     // top-level response unless source names a delegate for it, then own's.
-    static string? MainResponse(Session s) =>
+    internal static string? MainResponse(Session s) =>
         s.Activity.Source?.Response is null ? s.Activity.Response ?? s.Activity.Own?.Response : s.Activity.Own?.Response;
 }

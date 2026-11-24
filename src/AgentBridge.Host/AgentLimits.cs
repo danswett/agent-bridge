@@ -29,7 +29,8 @@ public sealed class AgentLimits
     readonly Window machineLaunches = new(Hour);
     DateTimeOffset? lastLaunchCheck;
 
-    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false);
+    // Fleet: a fleet worker (a grant launch). It takes a live slot like any agent-started session but the idle policy never ends it (#2771).
+    sealed record LiveLaunch(string? Session = null, DateTimeOffset? IdleSince = null, bool PersonTyped = false, bool Fleet = false);
 
     public AgentLimits(
         Func<DateTimeOffset>? clock = null,
@@ -110,7 +111,7 @@ public sealed class AgentLimits
         }
     }
 
-    public void LaunchStarted(string origin, string request, string session)
+    public void LaunchStarted(string origin, string request, string session, bool fleet = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(session);
         lock (gate)
@@ -120,7 +121,7 @@ public sealed class AgentLimits
                 || launch.Session is { } existing && existing != session
                 || liveLaunches.Any(p => p.Key != key && p.Value.Session == session))
             { throw new InvalidOperationException("The session must bind to its own reserved agent launch exactly once."); }
-            liveLaunches[key] = launch with { Session = session };
+            liveLaunches[key] = launch with { Session = session, Fleet = fleet };
         }
     }
 
@@ -162,7 +163,7 @@ public sealed class AgentLimits
         lock (gate)
         {
             var now = clock();
-            return liveLaunches.Values.Where(l => !l.PersonTyped && l.Session is not null
+            return liveLaunches.Values.Where(l => !l.PersonTyped && !l.Fleet && l.Session is not null
                 && l.IdleSince is { } since && now - since >= idle).Select(l => l.Session!).ToArray();
         }
     }

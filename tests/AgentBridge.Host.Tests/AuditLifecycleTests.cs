@@ -50,6 +50,7 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
     {
         Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
         Pair();
+        Assert.True(Writer().Append(AgentBridge.Host.Tests.AuditActiveRunRetentionTests.Seal(run)));   // a sealed run's day is retained normally; an active run's never is (#2971)
         var oldest = JsonNode.Parse(File.ReadAllText(Head(false)))!["root"]!.GetValue<string>();
         for (var day = 0; day <= AgentAuditLog.KeepDays; day++)
         {

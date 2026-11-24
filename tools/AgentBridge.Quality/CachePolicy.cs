@@ -27,8 +27,9 @@ static partial class CachePolicy
     {
         // Its trivy archive is SHA-256 checked against the pinned hash before use, so a shipping job may restore it.
         ["./.github/actions/install-trivy"] = "restore",
-        // Its debs are verified against live signed apt indexes before install, so it saves on always().
-        ["./.github/actions/playwright-system-packages"] = "save",
+        // Its debs are verified against live signed apt indexes before install, so the archives it saves are safe to take on always() (ci.yml gates the call on them being ready).
+        // The restore action beside it only restores and takes no exception: a save put back into it is refused like any other action's.
+        ["./.github/actions/playwright-system-packages-save"] = "save",
     };
 
     [GeneratedRegex(@"(^|[/\\*])(obj|bin)([/\\]|$)", RegexOptions.Multiline)]

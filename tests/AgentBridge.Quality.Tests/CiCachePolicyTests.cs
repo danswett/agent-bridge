@@ -109,9 +109,12 @@ public sealed class CiCachePolicyTests
     {
         // install-trivy: its restore is hash-checked before use, so a shipping job may take it.
         Assert.Empty(Check(Ci("app", "      - uses: ./.github/actions/install-trivy\n"), new() { ["./.github/actions/install-trivy"] = Composite(Cache(Restore)) }));
-        // playwright-system-packages: its debs are verified against live signed indexes, so it saves on always().
-        var apt = Composite(Cache(Save, condition: "always() && steps.packages.outputs.cache-ready == 'true'"));
-        Assert.Empty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages\n"), new() { ["./.github/actions/playwright-system-packages"] = apt }));
+        // playwright-system-packages-save: its debs are verified against live signed indexes, so the archives it saves are safe to take on always() (ci.yml gates the call).
+        // The restore action beside it only restores: that passes, and a save put back into it is refused like any other action's.
+        var apt = Composite(Cache(Save));
+        Assert.Empty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages-save\n"), new() { ["./.github/actions/playwright-system-packages-save"] = apt }));
+        Assert.Empty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages\n"), new() { ["./.github/actions/playwright-system-packages"] = Composite(Cache(Restore)) }));
+        Assert.NotEmpty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages\n"), new() { ["./.github/actions/playwright-system-packages"] = apt }));
         Assert.NotEmpty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/other\n"), new() { ["./.github/actions/other"] = apt }));
     }
 
