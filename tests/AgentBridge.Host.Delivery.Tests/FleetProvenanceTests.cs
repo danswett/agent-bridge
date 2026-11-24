@@ -110,7 +110,7 @@ public sealed class FleetProvenanceTests : IDisposable
     }
 
     [Fact]
-    public void A_role_is_recorded_only_for_a_person_launch_or_a_launch_within_the_launching_sessions_own_role()
+    public void A_role_is_recorded_only_for_a_person_launch_never_for_a_new_launch_by_an_agent()
     {
         var store = Open();
         const string coordinator = "99999999-9999-4999-8999-999999999999", builder = "55555555-5555-4555-8555-555555555555";
@@ -123,7 +123,9 @@ public sealed class FleetProvenanceTests : IDisposable
         var reopened = Open();
         Assert.Equal("quality-lead", reopened.RoleFor("quality-lead", null));                      // a person's launch
         Assert.Null(reopened.RoleFor(null, null));
-        Assert.Equal("quality-lead", reopened.RoleFor("quality-lead", $"agent:m/{coordinator}")); // a coordinator within its own role
+        // Owner decision Nov 23 19:52 PT, item 2: NEW coordinator sessions need the owner's direct approval, so even a coordinator launching a
+        // child with its own role records none; a role survives only on the same session resumed in place (RoleKept).
+        Assert.Null(reopened.RoleFor("quality-lead", $"agent:m/{coordinator}"));
         Assert.Null(reopened.RoleFor("chief", $"agent:m/{coordinator}"));                          // never a higher or other role
         Assert.Null(reopened.RoleFor("quality-lead", $"agent:m/{builder}"));                       // a builder never records a coordinator role
         Assert.Null(reopened.RoleFor("quality-lead", "agent:m/11111111-1111-4111-8111-111111111111")); // an unknown session has none

@@ -31,7 +31,9 @@ to update at the machine or Install here. Set to "Install between turns" (#689, 
 use), it installs at the first gap with no turn running and no question waiting, or at a six-hour
 backstop that never installs while a question waits; its state says so (`automatic` true, phase
 `waiting`), and while the backstop skips for a question `waiting` reads "Update ready · waiting for
-a question to be answered".
+a question to be answered". Both go only inside the update window, 02:00-05:00 Pacific Time by default (#4468):
+outside it `waiting` reads "it waits for the update window 02:00-05:00 Pacific Time". A press (Restart to update,
+Install, Update now) is never held by the window.
 Being asked stands in for that switch, for that release: an asked install goes ahead with the
 switch off. However long ago the release was found, it waits until no session there has been busy
 for two minutes; nobody at the machine was warned, so a busy session always holds it.
@@ -116,7 +118,7 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `progress` | int? | 0–100 while downloading |
 | `waiting` | string? | While waiting: for what (a session busy, another profile running). Also, in any phase, once a release has waited more than six hours (held by the machine, or downloaded and not restarted into): "Needs you: the update to X has waited since T because Y" (#800, a reminder; nothing installs because of it) |
 | `request` | string? | The press being carried out now, if one is |
-| `automatic` | bool | Whether the app installs updates without being asked. From #516 on, `true` only on a machine set to "Install between turns" (#689), whose phase is then `waiting` while a release waits for a gap between turns |
+| `automatic` | bool | Whether the app installs updates without being asked. From #516 on, `true` only on a machine set to "Install between turns" (#689), whose phase is then `waiting` while a release waits for a gap between turns, or for the update window (#4468) |
 | `last` | `UpdateResult`? | How the last update asked for, or installed by itself, ended |
 | `canUpdateNow` | bool | **#1159, the host's.** Whether Update now can be pressed here: the app running, installed and new enough to carry it out (it says so in `host.update.report`'s `carriesUpdateNow`), `permissions.remoteManage` on, the machine not read-only, no agent sign-in under way, no other Update now downloading or leaving, and a restart slot free (its own allowance or the shared cap, settled Q7). Absent reads as false. Whatever the app puts here is dropped |
 | `updateNowWhy` | string? | **#1159, the host's.** With `available` set and `canUpdateNow` false: why, as a code (`disabled`, `read-only`, `old-app`, `unavailable`, `sign-in`, `busy`, `restart-cap`), which a client words itself ([What the person sees](#what-the-person-sees)). A read-only machine serves no `update.*` at all; `read-only` is for a state a client already holds when the machine turns read-only, or one served in the moment before it notices |

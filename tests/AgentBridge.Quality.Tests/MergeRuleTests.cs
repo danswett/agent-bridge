@@ -558,6 +558,17 @@ public class MergeRuleTests
         Assert.Equal(state, verdict.State);
     }
 
+    // #4558: a failed checkout or setup in a job split out of light is excused after one rerun, as light's is; a step that runs the checks never is.
+    [Theory]
+    [InlineData("design-gen", new[] { "Set up job", "Complete job", "Run actions/checkout@*", "Post Run actions/checkout@*", "Run actions/setup-node@*" })]
+    [InlineData("playwright-apt", new[] { "Set up job", "Complete job", "Run actions/checkout@*", "Post Run actions/checkout@*" })]
+    public void The_jobs_split_out_of_light_excuse_only_their_setup_and_teardown_steps(string job, string[] steps)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+
+        Assert.Equal(steps, config.MainGreen.InfraSteps[job]);
+    }
+
     [Fact]
     public void Sensitive_paths_match_whatever_the_case() =>
         Assert.Equal("failure", MergeRule.Evaluate(Config, MainGreen, Pr(["SRC/agentbridge.transport/Channel.cs"]))!.State);
@@ -1065,11 +1076,12 @@ public class MergeRuleTests
     //   Main red                    workflow_run, completed CI on main only. A workflow_run run belongs to the default
     //                               branch's tip, never a pull request's head, and it cannot be dispatched.
     //   Re-run known flakes         the same trigger, the same reason.
+    //   Full red                    workflow_run, completed Full on main only (Full is itself a workflow_run of CI on main), the same reason.
     //   Upload release halt policy  push to main and dispatch; its one job runs only on refs/heads/main, so a dispatch
     //                               on a pull request's branch ends skipped, which the judge counts as passing.
     // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
     // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
-    static readonly string[] CannotReachAPullRequestHead = ["Main red", "Re-run known flakes", "Upload release halt policy"];
+    static readonly string[] CannotReachAPullRequestHead = ["Full red", "Main red", "Re-run known flakes", "Upload release halt policy"];
 
     // The second set: workflows with no pull_request, pull_request_target or push trigger, only schedule, workflow_call, a
     // workflow_run of CI on main, or workflow_dispatch. Their scheduled and workflow_run runs sit on the default branch's tip,
@@ -1084,12 +1096,13 @@ public class MergeRuleTests
     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
     //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
     //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
+    //   Stale PWA alarm (schedule every 4 h and dispatch, on main: reads the served site and main's history, judges no pull request, #4369).
     //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
     //   request; docs/app-windows.md, "Spacing").
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
         "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Full", "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Update gap",
+        "Full", "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Stale PWA alarm", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)
@@ -1567,10 +1580,10 @@ public class MergeRuleTests
     // The pause before an old unreadable run is read once more costs nothing here.
     static MergeRuleTests() => MergeRuleCommand.UnreadableRetryAfter = TimeSpan.Zero;
 
-    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null)
+    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null, IReadOnlyDictionary<long, string>? plans = null, string? recordFrom = null, string annotations = "[]")
     {
-        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times);
-        var config = WriteConfig();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times, planRecords: plans, annotations: annotations);
+        var config = WriteConfig(recordFrom: recordFrom);
         try
         {
             var output = new StringWriter();
@@ -1738,6 +1751,215 @@ public class MergeRuleTests
 
         Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
         Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    // Item A (#2454): a main run that relied on its in-flight parent to test only its own change is green only if that parent is green too, back
+    // to a run that relied on none. A parent that fails after the child passed keeps main red until a later run that covers its diff passes.
+    static (string Posted, string Output) Relied(string runs, params (long Run, string Record)[] plans) =>
+        JudgeMain(runs, new Dictionary<long, string>(), null, plans.ToDictionary(p => p.Run, p => p.Record));
+
+    [Fact]
+    public void A_run_that_relied_on_a_parent_that_is_green_is_green()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "success", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_parent_that_fails_after_the_child_passed_keeps_main_red()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("relied on", posted, StringComparison.Ordinal);
+        Assert.Contains(Sha(7)[..7], posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_failure_further_back_the_chain_keeps_main_red()
+    {
+        var runs = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 30), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs, (9, Relies(8)), (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains(Sha(7)[..7], posted, StringComparison.Ordinal);
+    }
+
+    // The clearing path: a later run whose base covers the failed diff (it relies on nothing, or on a green run) passes, and main is green again.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_later_run_that_covers_the_failed_parent_clears_main(bool laterReliesOnAGreenRun)
+    {
+        var runs = MainRunsAged(MainNow, (9, "completed", "success", 1, 5), (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs, (9, laterReliesOnAGreenRun ? Relies(8) : RelyNone), (8, laterReliesOnAGreenRun ? RelyNone : Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    // A parent still running is no verdict: the child is not green yet, so the judge reads on to the older run, and main is not red because of it.
+    [Fact]
+    public void A_parent_still_running_within_the_cap_passes_the_child_over_for_an_older_run()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
+
+        var (posted, output) = Relied(runs, (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("run 6", output, StringComparison.Ordinal);
+        Assert.Contains("still running", output, StringComparison.Ordinal);
+    }
+
+    // The cap: a parent still "running" after 2 hours is a zombie. It never turns into a pass, and it is not passed over silently: it is red.
+    [Fact]
+    public void A_parent_still_running_after_two_hours_is_treated_as_failed()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 180), (6, "completed", "success", 1, 240));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("2 hours", posted, StringComparison.Ordinal);
+    }
+
+    // A cancelled parent never tested its change: the child's pass does not stand for it, so main is red until a run that covers the diff passes.
+    [Fact]
+    public void A_cancelled_parent_is_not_covered_by_the_child()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "cancelled", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("cancelled", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_skipped_parent_is_never_green()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "skipped", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_parent_with_no_run_at_all_fails_closed()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
+
+        var (posted, _) = Relied(runs, (8, Relies(5)));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_run_with_no_plan_record_relied_on_nothing()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs);
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    // P1-1: a parent still running only excuses a child that is green by its own jobs; a red child holds main red, not passed over for an older green run.
+    [Fact]
+    public void A_red_run_that_relied_on_a_parent_still_running_holds_main_red_and_is_not_passed_over()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "failure", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains(Sha(8)[..7], posted, StringComparison.Ordinal);
+    }
+
+    // P2-2: from the cutoff on, a missing plan-base record is an error (the annotation may not have landed); an older run relied on none.
+    // Main's real config sets the cutoff to when #3944 (the record's emitter) merged, so a run after it is held to the record.
+    [Theory]
+    [InlineData(-30, " success merge-rule ")]
+    [InlineData(10, " error merge-rule ")]
+    public void A_run_after_3944_merged_with_no_record_is_an_error_but_an_older_run_relied_on_none(int minutesFromCutoff, string expected)
+    {
+        var from = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml")).MainGreen.RelianceRecordFrom;
+        Assert.Equal("2026-11-24T18:34:48Z", from);
+        var cutoff = DateTimeOffset.Parse(from!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
+
+        var (posted, _) = JudgeMain(MainRunsAged(cutoff.AddMinutes(minutesFromCutoff + 20), (8, "completed", "success", 1, 20)), new Dictionary<long, string>(), recordFrom: from);
+
+        Assert.True(posted.Contains(expected, StringComparison.Ordinal), posted);
+    }
+    [Fact]
+    public void Two_plan_base_records_on_one_run_are_an_error()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
+        var one = new { title = "plan-base", message = RelyNone, annotation_level = "notice" };
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string>(), annotations: JsonSerializer.Serialize(new[] { one, one }));
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    // The depth cap: a chain of 20 relied-on parents is read to its end; a 21st is a chain too deep to trust, so main is red, never a pass.
+    [Theory]
+    [InlineData(21, " success merge-rule ")]
+    [InlineData(22, " failure merge-rule ")]
+    public void A_chain_of_reliance_deeper_than_twenty_parents_fails_closed(int runCount, string expected)
+    {
+        // Three-digit ids: Sha pads "c<id>" with zeros, so Sha(1) and Sha(10) would be the same sha and the chain would loop.
+        var first = 101;
+        var runs = MainRunsAged(MainNow, Enumerable.Range(first, runCount).Reverse().Select(id => ((long)id, "completed", (string?)"success", 1, first + runCount - id)).ToArray());
+        var plans = Enumerable.Range(first, runCount).Select(id => ((long)id, id == first ? RelyNone : Relies(id - 1))).ToArray();
+
+        var (posted, output) = Relied(runs, plans);
+
+        Assert.True(posted.Contains(expected, StringComparison.Ordinal), posted);
+        if (runCount > 21) Assert.Contains("deeper than 20", posted, StringComparison.Ordinal);
+    }
+
+    // A record that is not in the shape is an error, never a guess that the run relied on nothing. Its raw text reaches the log, so
+    // its control characters are shown as escapes and its length is capped: it can't add a workflow command.
+    [Fact]
+    public void A_plan_record_that_is_not_in_the_shape_is_an_error_shown_escaped_and_cut_short()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, output) = Relied(runs, (8, "base=x\n::error::boom" + new string('a', 200)), (7, RelyNone));
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("unreadable plan-base record 'base=x\\u000a::error::boom", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('a', 100), output, StringComparison.Ordinal);
+    }
+    // The parent has a run on its sha, but main's recent history (the window the judge reads) does not hold it: it cannot be judged, so it is red.
+    [Fact]
+    public void A_parent_that_is_not_in_mains_recent_runs_is_red()
+    {
+        var both = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "success", 1, 60));
+        var childOnly = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: both, mainRunPages: [childOnly],
+            planRecords: new Dictionary<long, string> { [8] = Relies(7), [7] = RelyNone });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain, utcNow: () => MainNow);
+
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains("not in main's recent runs", posted, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
     }
 
     [Fact]
@@ -2474,7 +2696,7 @@ public class MergeRuleTests
     [InlineData("family-skipped", "failure")]
     public void A_selective_main_run_requires_product_but_not_unselected_product_runners(string scenario, string state)
     {
-        var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+        var config = RealConfigWithoutRecordCutoff();
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
         object Entry(string name, string conclusion) =>
             new { id = 1, name, status = "completed", conclusion, run_attempt = 1 };
@@ -2818,12 +3040,13 @@ public class MergeRuleTests
                     ? new[] { new { name = "Setup", status = "completed", conclusion = "failure" } } : [],
             }).ToArray();
         var github = new FakeGitHub(GraphQLPullRequest(Head),
-            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }), annotations: "unreadable annotations");
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/annotations", StringComparison.Ordinal));
+            // Only the plan job's (id 0) annotation is read, for the run's plan-base record: never a post-merge or other job's.
+            Assert.All(github.RestPaths.Where(p => p.Contains("/annotations", StringComparison.Ordinal)), p => Assert.Contains("/check-runs/0/annotations", p, StringComparison.Ordinal));
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
@@ -2968,17 +3191,19 @@ public class MergeRuleTests
     [InlineData("wrong-job", "failure")]
     public void Main_classifies_infra_per_job_and_flags_only_one_rerun(string scenario, string state)
     {
-        var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+        var config = RealConfigWithoutRecordCutoff();
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
-        // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
+        // The jobs the merge waits on are the FAST lane's (S2, #4104): product, ha-integration, light and the app build. The browser jobs are
+        // the FULL lane's, so the node-setup family stands in for them here (light's infra_steps); a step of another family is the wrong job.
         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
-            : scenario == "wrong-job" ? "light" : "pwa-ui (chromium 3/3)";
+            : scenario == "wrong-job" ? "ha-integration" : "light";
         var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
             : scenario == "npm-ci" ? "Run npm ci"
             : scenario == "system-packages" ? "Download Playwright's system packages"
-            : "Playwright's browsers from main's cache";
+            : scenario == "wrong-job" ? "Playwright's browsers from main's cache"
+            : "Run actions/setup-node@v6";
         var steps = new List<object>
         {
             Step(scenario == "unknown" ? "Unknown step" : setup, "failure"),
@@ -3154,7 +3379,14 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
-    static string WriteConfig(bool arm64Waiver = false)
+    // The real config, for its job names, minus its plan-base record cutoff: the fixtures that read it carry no run dates and no records.
+    static string RealConfigWithoutRecordCutoff()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
+        File.WriteAllLines(path, File.ReadAllLines(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml")).Where(l => !l.Contains("reliance_record_from", StringComparison.Ordinal)));
+        return path;
+    }
+    static string WriteConfig(bool arm64Waiver = false, string? recordFrom = null)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
         File.WriteAllText(path, """
@@ -3167,7 +3399,7 @@ public class MergeRuleTests
             main_green: { workflow: ci.yml, exempt_labels: [fixes-main], exempt_paths: [tests/AgentBridge.*.Tests/**], jobs: [light, app (win-x64), app (win-arm64), product] }
             copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
-            """ + (arm64Waiver ? "\n" + WaiverYaml : ""));
+            """.Replace("jobs: [light,", recordFrom is null ? "jobs: [light," : $"reliance_record_from: \"{recordFrom}\", jobs: [light,", StringComparison.Ordinal) + (arm64Waiver ? "\n" + WaiverYaml : ""));
         return path;
     }
 
@@ -3278,7 +3510,17 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null, int overlapOf = 0, Func<string, bool>? overlapOn = null) : IGitHub
+    // A run's plan job has the id PlanJobBase + the run's id, so a test can say what that run's plan job annotated.
+    const long PlanJobBase = 1_000_000;
+
+    static string Sha(long run) => $"c{run}".PadRight(40, '0');
+
+    // The plan-base record of a run that diffed from its own base and relied on no parent, or on the in-flight parent run given.
+    static string Relies(long parentRun) => $"base={Sha(1)} relied-parent={Sha(parentRun)}";
+
+    static readonly string RelyNone = $"base={Sha(1)} relied-parent=none";
+
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null, int overlapOf = 0, Func<string, bool>? overlapOn = null, IReadOnlyDictionary<long, string>? planRecords = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -3431,13 +3673,18 @@ public class MergeRuleTests
                 return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = 5, jobs =
                     new[] { "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", "plan" }.Select((name, id) => new
                     {
-                        id, name, status = name == "plan" ? "completed" : run.GetProperty("status").GetString(),
+                        id = name == "plan" ? PlanJobBase + run.GetProperty("id").GetInt64() : id, name, status = name == "plan" ? "completed" : run.GetProperty("status").GetString(),
                         conclusion = name == "plan" ? "success" : run.GetProperty("conclusion").GetString(), run_attempt = run.GetProperty("run_attempt").GetInt32(),
                     }),
                 }));
             }
             if (path.Contains("/check-runs/", StringComparison.Ordinal) && path.Contains("/annotations", StringComparison.Ordinal))
+            {
+                var checkRun = long.Parse(path[(path.IndexOf("/check-runs/", StringComparison.Ordinal) + "/check-runs/".Length)..path.IndexOf("/annotations", StringComparison.Ordinal)], System.Globalization.CultureInfo.InvariantCulture);
+                if (checkRun >= PlanJobBase && planRecords is not null && planRecords.TryGetValue(checkRun - PlanJobBase, out var record))
+                    return JsonDocument.Parse(JsonSerializer.Serialize(new[] { new { title = "plan-base", message = record, annotation_level = "notice" } }));
                 return JsonDocument.Parse(annotations);
+            }
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)

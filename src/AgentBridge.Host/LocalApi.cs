@@ -20,14 +20,14 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,
         RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,
-        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null,
-        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null) =>
-                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, remoteLaunch);
+        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null, FleetResumeCommands? fleetResume = null,
+        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null, ScriptAdmission? scriptAdmission = null) =>
+                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, fleetResume, remoteLaunch, scriptAdmission);
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log,
         RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
-        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop,
-        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch) => async (channel, op, data) =>
+        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop, FleetResumeCommands? fleetResume,
+        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch, ScriptAdmission? scriptAdmission) => async (channel, op, data) =>
     {
         try
         {
@@ -79,6 +79,13 @@ public static class LocalApi
             { throw Refuse(op, caller, "person-only: only the person in the local app may approve a folder", log); }
             return control.WorkspaceAdd(data);
         }
+        if (op is HostOps.WorkspaceList or HostOps.WorkspaceRemove)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
+            { throw Refuse(op, caller, "person-only: only the person in the local app may see or remove an approved folder", log); }
+            return op == HostOps.WorkspaceList ? control.WorkspaceList() : control.WorkspaceRemove(data);
+        }
         if (op == SamePcPinProtocol.Op)
         {
             // Ruling item 3 (#3450): the person's signed-in app on this machine, never an agent, script, CLI or relay peer.
@@ -89,6 +96,12 @@ public static class LocalApi
         }
         if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet" or "scripts.list" or "scripts.confirm")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
+        // The scheduled-task launcher (#3305 S1a): judged by the host with the hello rule, from its own process chain, never by what it says about itself.
+        if (op is ScriptAdmission.AdmitOp or ScriptAdmission.FinishedOp)
+        {
+            if (scriptAdmission is null || channel is not LocalChannel caller) { throw new InvalidOperationException("refused: refused"); }
+            return scriptAdmission.Handle(op, data, caller.Peer?.Ancestry ?? ProcessAncestry.Unknown);
+        }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
             if (credentials is null || !OperatingSystem.IsWindows() || channel is not LocalChannel local)
@@ -215,6 +228,14 @@ public static class LocalApi
             if (fleetStop is null || credentials is null || ending.Kind != CallerKind.Agent || credentials.Of(channel) is not { Kind: "session" } ender)
             { throw Refuse(op, ending, "fleet end needs a live agent session credential", log); }
             return await fleetStop.HandleAsync(ender, data);
+        }
+        if (op == FleetResumeCommands.Op)
+        {
+            // Only a live agent session credential, as for fleet.end; the handler decides whether it is a coordinator's.
+            var resuming = callers.Classify(channel, fresh: true);
+            if (fleetResume is null || credentials is null || resuming.Kind != CallerKind.Agent || credentials.Of(channel) is not { Kind: "session" } coordinator)
+            { throw Refuse(op, resuming, "fleet resume needs a live agent session credential", log); }
+            return await fleetResume.HandleAsync(coordinator, data);
         }
         if (grantLaunch is not null && op == LaunchProtocol.Launch && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("grant", out _)
             && credentials is { } grantIssuer && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Agent } granted

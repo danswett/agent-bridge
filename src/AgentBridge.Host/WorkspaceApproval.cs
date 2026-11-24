@@ -40,6 +40,70 @@ internal static class WorkspaceApproval
         catch (Exception e) when (e is ArgumentException or IOException) { return false; }
     }
 
+    public const string Removed = "removed";
+    public const string Stale = "stale";
+    public const string NotApproved = "not-approved";
+
+    public sealed record Entry(string Path, string Label, bool Isolate);
+
+    // The approved folders as the config file holds them, with a baseline: a hash of the raw list, so any added, removed or changed entry
+    // changes it. A folder that has gone away is still listed. Throws JsonException when config.json is not JSON.
+    public sealed record Listing(IReadOnlyList<Entry> Workspaces, string Baseline);
+
+    public static Listing List(string configFolder) => Read(ConfigCommands.Read(System.IO.Path.Combine(configFolder, HostSettings.FileName)));
+
+    static string? Text(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    static Listing Read(JsonObject root)
+    {
+        var workspaces = root["launch"]?["workspaces"] as JsonArray;
+        var entries = new List<Entry>();
+        foreach (var node in workspaces ?? [])
+        {
+            var obj = node as JsonObject;
+            var written = obj is null ? Text(node) : Text(obj["path"]);
+            if (written is null) { continue; }
+            var path = Folders.Expand(written) ?? written;
+            var label = obj is not null && Text(obj["label"]) is { Length: > 0 } named ? named : Folders.DefaultLabel(path);
+            entries.Add(new(path, label, obj?["isolate"] is JsonValue i && i.TryGetValue<bool>(out var iso) && iso));
+        }
+        return new(entries, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(workspaces?.ToJsonString() ?? "[]"))));
+    }
+
+    // Removes one exact approved folder, only against the list the person saw (the baseline): a list that has changed since is Stale and
+    // nothing is written. A folder below an approved one is not approved, so it is NotApproved. Everything else in the file is kept as it was.
+    public static Result Remove(string configFolder, string folder, string baseline, TimeSpan? wait = null)
+    {
+        string? expanded;
+        try { expanded = string.IsNullOrWhiteSpace(folder) ? null : Folders.Expand(folder); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { expanded = null; }
+        if (expanded is null || !System.IO.Path.IsPathRooted(expanded)) { return new(NotAPath); }
+        using var gate = new Mutex(false, GateName(configFolder));
+        bool held;
+        try { held = gate.WaitOne(wait ?? GateWait); } catch (AbandonedMutexException) { held = true; }
+        if (!held) { return new(Busy, expanded); }
+        var path = System.IO.Path.Combine(configFolder, HostSettings.FileName);
+        try
+        {
+            var root = ConfigCommands.Read(path);
+            var listing = Read(root);
+            if (!string.Equals(listing.Baseline, baseline, StringComparison.Ordinal)) { return new(Stale, expanded); }
+            var workspaces = (JsonArray?)root["launch"]?["workspaces"] ?? [];
+            string? label = null;
+            for (var i = workspaces.Count - 1; i >= 0; i--)
+            {
+                var written = workspaces[i] is JsonObject o ? Text(o["path"]) : Text(workspaces[i]);
+                if (written is null || !Folders.Same(Folders.Expand(written) ?? written, expanded)) { continue; }
+                label ??= workspaces[i] is JsonObject n && Text(n["label"]) is { Length: > 0 } named ? named : Folders.DefaultLabel(expanded);
+                workspaces.RemoveAt(i);
+            }
+            if (label is null) { return new(NotApproved, expanded); }
+            return ConfigCommands.Save(path, root, new StringWriter()) ? new(Removed, expanded, label) : new(Unwritable, expanded, label);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(Unwritable, expanded, null, $"{path}: {e.Message}"); }
+        finally { gate.ReleaseMutex(); }
+    }
+
     public static Result Add(string configFolder, string folder, string? label, bool isolate, Func<string, bool> isSystemDirectory, TimeSpan? wait = null)
     {
         string full;

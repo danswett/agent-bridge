@@ -1,4 +1,6 @@
 using System.Text.Json;
+using AgentBridge.AgentEnvelope;
+using AgentBridge.Host.Lite;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
@@ -56,7 +58,7 @@ public sealed class FleetStopTests : IDisposable
         Assert.True(store.Issue(grant).Usable);
         counters = new(store);
     }
-    public void Dispose() { key.Dispose(); f.Dispose(); }
+    public void Dispose() { key.Dispose(); peerSign.Dispose(); f.Dispose(); }
     void Settings(string label = "repo", bool excluded = false) => File.WriteAllText(Path.Combine(Folder, HostSettings.FileName),
         JsonSerializer.Serialize(new { agents = new { enabled = true, inbound = new { exclude = new { workspaces = excluded ? new[] { label } : [] } } },
             launch = new { workspaces = new[] { new { label, path = f.Root, isolate = true } } } }));
@@ -68,6 +70,166 @@ public sealed class FleetStopTests : IDisposable
     Task<FleetStopReceipt> End(FleetStopCommands? handler = null, Guid? request = null, string? session = null) =>
         (handler ?? Open()).HandleAsync(caller, JsonSerializer.SerializeToElement(
             new FleetStopInput(1, request ?? Guid.NewGuid(), grant.Id, session ?? id), ProtocolJson.Options));
+
+    // G10: a stop from another host of this account. The receiving host's own grant is the authority; the signed envelope only
+    // carries the request. Same grant gate, counters, audit and stopper as a local stop, with no local credential to check.
+    readonly byte[] peerStatic = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+    readonly System.Security.Cryptography.ECDsa peerSign = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+    string Peer => Wire.DeviceId(peerStatic);
+    GrantSubject RemoteSubject => new("123", Peer, Guid.NewGuid().ToString(), "AQEBAQEBAQEBAQEBAQEBAQ", new(900, started));
+    GrantSubject GrantRemote()
+    {
+        var subject = RemoteSubject;
+        grant = grant with { Id = Guid.NewGuid(), Subjects = [subject], StopTargets = [Target] };
+        Assert.True(store.Issue(grant).Usable);
+        return subject;
+    }
+    JsonElement EndData(Guid? request = null, string? session = null) => JsonSerializer.SerializeToElement(
+        new FleetStopInput(1, request ?? Guid.NewGuid(), grant.Id, session ?? id, Device), ProtocolJson.Options);
+    sealed class LiteGate(bool on) : ILiteMode
+    { public bool On { get; set; } = on; public long KillEpoch => 0; public void TurnOff(string why) { On = false; } public void RaiseEpoch(long epoch) { } }
+    FleetRemoteEnd Receiver(DateTimeOffset? up = null, LiteGate? gate = null) => new(Open(), new GrantStore(Folder, key, new(Folder), new([], [], [], [], [], [], [], [])),
+        gate ?? new LiteGate(true), startedAt: up ?? DateTimeOffset.UtcNow.AddMinutes(-10));
+    // Refused stop rows in the audit, as raw lines (a refusal row carries no gate metadata).
+    string[] RefusedRows() => Directory.Exists(Path.Combine(Folder, AgentAuditLog.FolderName))
+        ? [.. Directory.GetFiles(Path.Combine(Folder, AgentAuditLog.FolderName), "*.jsonl").SelectMany(File.ReadAllLines)
+            .Where(l => l.Contains("\"session.stop\"") && l.Contains("\"refused\""))] : [];
+    LiteChannel PeerChannel(bool trusted = true) => new(Peer, "host", peerStatic, Device, "123", trusted);
+    JsonElement Sealed(GrantSubject subject, JsonElement end, string action = FleetActionEnvelope.EndAction, string audience = Device, JsonElement? payloadOf = null)
+    {
+        var input = (payloadOf ?? end).Deserialize<FleetStopInput>(ProtocolJson.Options)!;
+        var q = peerSign.ExportParameters(false).Q;
+        var body = new FleetActionBody("123", Peer, FleetActionEnvelope.SubjectDigest(subject.Account, subject.SourceHost, subject.Session,
+            subject.Credential, subject.ProcessInstance.Pid, subject.ProcessInstance.StartedAt.UtcTicks), audience, action, grant.Id.ToString("D"), 0,
+            end.Deserialize<FleetStopInput>(ProtocolJson.Options)!.Request, FleetActionEnvelope.NewNonce(), DateTimeOffset.UtcNow.AddSeconds(60),
+            FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
+        return JsonSerializer.SerializeToElement(new { envelope = FleetActionEnvelope.Seal(body, new EcdsaEnvelopeSigner(peerSign)), end,
+            signPoint = AgentBridge.Roster.Codec.Base64Url([4, .. q.X!, .. q.Y!]) }, ProtocolJson.Options);
+    }
+
+    [Fact]
+    public async Task A_remote_end_without_a_grant_is_refused_even_when_the_launch_record_would_let_a_local_agent_end_it()
+    {
+        // The same provenance that lets the local agent end this session by record (see An_agent_ends_a_session_the_launch_record_shows...).
+        var handler = Provenance((_, process) => process is { Id: 700 });
+        var receipt = await handler.HandleRemoteAsync(GrantRemote(), JsonSerializer.SerializeToElement(
+            new FleetStopInput(1, Guid.NewGuid(), Guid.Empty, id, Device), ProtocolJson.Options));
+        Assert.Equal(("refused", "scope", 0, 0), (receipt.Outcome, receipt.Reason, injector.Calls, pendingReads));
+    }
+
+    [Fact]
+    public async Task A_remote_subject_the_grant_names_ends_its_own_session_through_the_same_gate_and_audits_the_relay_path()
+    {
+        var subject = GrantRemote();
+        var receipt = await Open().HandleRemoteAsync(subject, EndData());
+        Assert.Equal(("ended", null), (receipt.Outcome, receipt.Reason));
+        Assert.Equal(1, injector.Calls);
+        Assert.Contains(Directory.GetFiles(Path.Combine(Folder, AgentAuditLog.FolderName), "*.jsonl").SelectMany(File.ReadAllLines),
+            line => line.Contains("relay") && line.Contains(grant.Id.ToString()));
+    }
+
+    [Fact]
+    public async Task A_remote_subject_from_this_host_or_another_account_or_outside_the_grant_is_refused_without_typing()
+    {
+        var subject = GrantRemote();
+        Assert.Equal("policy", (await Open().HandleRemoteAsync(subject with { SourceHost = Device }, EndData())).Reason);
+        Assert.Equal("policy", (await Open().HandleRemoteAsync(subject with { Account = "other" }, EndData())).Reason);
+        Assert.Equal("scope", (await Open().HandleRemoteAsync(subject with { Session = Guid.NewGuid().ToString() }, EndData())).Reason);
+        Assert.Equal(0, injector.Calls);
+    }
+
+    [Fact]
+    public async Task A_signed_end_from_a_trusted_peer_stops_once_and_its_replay_is_refused()
+    {
+        var subject = GrantRemote();
+        var receiver = Receiver();
+        var data = Sealed(subject, EndData());
+        Assert.Equal("ended", (await receiver.ReceiveAsync(PeerChannel(), data)).Outcome);
+        Assert.Equal("policy", (await receiver.ReceiveAsync(PeerChannel(), data)).Reason);
+        Assert.Equal(1, injector.Calls);
+    }
+
+    [Fact]
+    public void The_end_receiver_requires_a_lite_mode()
+    {
+        Assert.Throws<ArgumentNullException>(() => new FleetRemoteEnd(Open(), new GrantStore(Folder, key, new(Folder), new([], [], [], [], [], [], [], [])), null!));
+    }
+
+    [Fact]
+    public async Task The_lite_kill_refuses_a_remote_end_before_any_parse_and_writes_nothing()
+    {
+        var subject = GrantRemote();
+        var gate = new LiteGate(false);
+        var before = RefusedRows().Length;
+        Assert.Equal("kill-switch", (await Receiver(gate: gate).ReceiveAsync(PeerChannel(), JsonSerializer.SerializeToElement(new { }))).Reason);
+        Assert.Equal("kill-switch", (await Receiver(gate: gate).ReceiveAsync(PeerChannel(), Sealed(subject, EndData()))).Reason);
+        Assert.Equal((0, before), (injector.Calls, RefusedRows().Length));
+        gate.On = true;
+        Assert.Equal("ended", (await Receiver(gate: gate).ReceiveAsync(PeerChannel(), Sealed(subject, EndData()))).Outcome);
+    }
+
+    [Fact]
+    public async Task A_refusal_before_the_envelope_verified_writes_no_audit_row()
+    {
+        var subject = GrantRemote();
+        var end = EndData();
+        var before = RefusedRows().Length;
+        await Receiver().ReceiveAsync(PeerChannel(trusted: false), Sealed(subject, end));
+        await Receiver().ReceiveAsync(PeerChannel(), Sealed(subject, end, action: FleetActionEnvelope.LaunchAction));
+        await Receiver().ReceiveAsync(PeerChannel(), Sealed(subject, end, audience: new string('c', 32)));
+        await Receiver().ReceiveAsync(PeerChannel(), JsonSerializer.SerializeToElement(new { }));
+        Assert.Equal(before, RefusedRows().Length);
+    }
+
+    [Theory]
+    [InlineData("replay", "policy")]
+    [InlineData("payload", "policy")]
+    [InlineData("subject", "scope")]
+    [InlineData("revoked", "grant-revoked")]
+    public async Task Every_refusal_after_the_envelope_verified_writes_one_refused_audit_row_for_the_peer(string kind, string reason)
+    {
+        var subject = GrantRemote();
+        var receiver = Receiver();
+        var end = EndData();
+        var data = Sealed(subject, end);
+        if (kind == "replay") { Assert.Equal("ended", (await receiver.ReceiveAsync(PeerChannel(), data)).Outcome); }
+        if (kind == "revoked") { Assert.True(store.Revoke(grant.Id, 1).Usable); }
+        if (kind == "subject") { data = Sealed(RemoteSubject, end); }
+        if (kind == "payload") { data = Sealed(subject, end, payloadOf: EndData(session: Guid.NewGuid().ToString())); }
+        var before = RefusedRows().Length;
+        Assert.Equal(reason, (await receiver.ReceiveAsync(PeerChannel(), data)).Reason);
+        var rows = RefusedRows();
+        Assert.Equal(before + 1, rows.Length);
+        Assert.Contains(reason, rows[^1]);
+        Assert.Contains(AgentProtocol.Principal(Peer, "unmatched"), rows[^1]);
+        Assert.True(injector.Calls <= 1);
+    }
+
+    [Theory]
+    [InlineData("excluded", "scope")]
+    [InlineData("agents-off", "kill-switch")]
+    public async Task The_remote_path_keeps_the_exclusion_lists_and_the_kill_the_local_path_has(string setting, string reason)
+    {
+        var subject = GrantRemote();
+        if (setting == "excluded") { Settings("repo", true); }   // the grant allows "repo": only the exclusion list can refuse it
+        else { File.WriteAllText(Path.Combine(Folder, HostSettings.FileName), """{"agents":{"enabled":false}}"""); }
+        Assert.Equal(reason, (await Open().HandleRemoteAsync(subject, EndData())).Reason);
+        Assert.Equal(0, injector.Calls);
+    }
+
+    [Fact]
+    public async Task An_untrusted_peer_a_launch_envelope_another_audience_a_tampered_payload_or_a_warm_up_refuse_before_any_stop()
+    {
+        var subject = GrantRemote();
+        var end = EndData();
+        Assert.Equal("policy", (await Receiver().ReceiveAsync(PeerChannel(trusted: false), Sealed(subject, end))).Reason);
+        Assert.Equal("policy", (await Receiver().ReceiveAsync(PeerChannel(), Sealed(subject, end, action: FleetActionEnvelope.LaunchAction))).Reason);
+        Assert.Equal("policy", (await Receiver().ReceiveAsync(PeerChannel(), Sealed(subject, end, audience: new string('c', 32)))).Reason);
+        Assert.Equal("policy", (await Receiver().ReceiveAsync(PeerChannel(), Sealed(subject, end, payloadOf: EndData(session: Guid.NewGuid().ToString())))).Reason);
+        Assert.Equal("policy", (await Receiver(up: DateTimeOffset.UtcNow).ReceiveAsync(PeerChannel(), Sealed(subject, end))).Reason);
+        Assert.Equal("scope", (await Receiver().ReceiveAsync(PeerChannel(), Sealed(RemoteSubject, end))).Reason);
+        Assert.Equal(0, injector.Calls);
+    }
 
     [Fact]
     public async Task A_not_own_session_is_refused_but_an_exact_persisted_exception_ends()

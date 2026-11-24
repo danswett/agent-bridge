@@ -50,6 +50,41 @@ public sealed class InstallWindowTests
         Assert.False(window.IsOpen(Utc("2026-11-24T20:00:00")));
     }
 
+    static double HoursOpen(InstallWindow window) =>
+        Enumerable.Range(0, 24 * 60).Count(m => window.IsOpen(Utc("2026-11-24T00:00:00").AddMinutes(m))) / 60.0;
+
+    // #4509's review (P1): one time unset or unreadable is the WHOLE default pair. Falling back per time could make the start
+    // equal the end, which is all day: the reader's probes, in hours open a day.
+    [Theory]
+    [InlineData("05:00", null)]
+    [InlineData("05:00", "25:00")]
+    [InlineData("garbage", "02:00")]
+    [InlineData(null, "02:00")]
+    [InlineData("02:00", null)]
+    public void A_half_set_or_unreadable_window_is_the_whole_default_never_open_all_day(string? start, string? end)
+    {
+        var window = InstallWindow.Of(new AppPreferences { InstallWindowStart = start, InstallWindowEnd = end });
+
+        Assert.Equal(3, HoursOpen(window));
+        Assert.Equal("02:00-05:00 Pacific Time", window.Label);
+    }
+
+    // Both times set and readable are used as they are: a window over midnight, and the same start and end, all day.
+    [Theory]
+    [InlineData("05:00", "02:00", 21)]
+    [InlineData("00:00", "00:00", 24)]
+    public void Both_times_set_and_readable_are_used_as_they_are(string start, string end, double hours) =>
+        Assert.Equal(hours, HoursOpen(InstallWindow.Of(new AppPreferences { InstallWindowStart = start, InstallWindowEnd = end })));
+    // #4509's review (P3): a machine that knows no time zone for the window gets it closed, saying why, never a throw
+    // from AutoUpdater's state.
+    [Fact]
+    public void With_no_time_zone_known_the_window_is_closed_and_says_why()
+    {
+        var window = InstallWindow.Of(new AppPreferences(), _ => null);
+
+        Assert.Equal(0, HoursOpen(window));
+        Assert.Equal("02:00-05:00 Pacific Time, closed: no time zone for it is known on this machine", window.Label);
+    }
     [Fact]
     public void The_same_start_and_end_is_all_day()
     {

@@ -138,36 +138,62 @@ public sealed partial class CiRunnerResolutionTests
         var map = RunnersMap().Match(plan);
         Assert.True(map.Success, "plan.ps1 has no $runners = [ordered]@{ ... } map");
         Assert.Equal(allowlist, MapValue().Matches(map.Groups[1].Value).Select(m => m.Groups[1].Value));
-        // Every value product-os takes comes out of that map: no literal runner anywhere it is written, and the output
-        // is exactly the variable (B421 P2-2).
-        Assert.Empty(ProductOsProblems(plan));
+        // Every write of product-os is pinned by ProductOsPinTests (the parser, not the text).
     }
 
-    // Every write to $productOs, wherever it sits (an if, a +=), must take its values from $runners[$_] alone, and
-    // $outputs['product-os'] must be ConvertTo-JsonArray $productOs.
-    internal static List<string> ProductOsProblems(string plan)
-    {
-        var problems = new List<string>();
-        var writes = ProductOsWrite().Matches(plan).Select(m => m.Value.Trim()).ToList();
-        if (writes.Count == 0) { problems.Add("no write to $productOs"); }
-        problems.AddRange(writes.Where(w => !w.Contains("$runners[$_]", StringComparison.Ordinal) || w.Contains('\'') || w.Contains('"') || w.Contains("+=", StringComparison.Ordinal)));
-        var outputs = ProductOsOutput().Matches(plan).Select(m => m.Groups[1].Value.Trim()).ToList();
-        if (outputs.Count != 1 || outputs[0] != "ConvertTo-JsonArray $productOs") { problems.Add($"$outputs['product-os'] is written {outputs.Count} time(s): {string.Join(" | ", outputs)}"); }
-        return problems;
-    }
-
+    // R8b P2: include in any other spelling, or a YAML merge key (<<) in a job, its matrix or a row, can carry an ab-ci row
+    // this check would otherwise not read: each fails closed.
     [Theory]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\nif ($x) { $productOs += 'my-runner' }\n$outputs['product-os'] = ConvertTo-JsonArray $productOs")]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\nif ($x) { $productOs = @('ab-ci') }\n$outputs['product-os'] = ConvertTo-JsonArray $productOs")]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\n$outputs['product-os'] = '[\"ab-ci\"]'")]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\n$outputs['product-os'] = ConvertTo-JsonArray $productOs\n$outputs['product-os'] = '[]'")]
-    public void A_product_os_write_or_output_from_anything_but_the_map_is_caught(string plan) => Assert.NotEmpty(ProductOsProblems(plan.Replace("\\n", "\n")));
+    [InlineData("{ os: [ubuntu-latest], Include: [{ os: ab-ci }] }")]
+    [InlineData("{ os: [ubuntu-latest], INCLUDE: [{ os: ab-ci }] }")]
+    [InlineData("{ os: [ubuntu-latest], include: [{ <<: *row }] }")]
+    [InlineData("{ os: [ubuntu-latest], <<: *rows }")]
+    public void Include_in_another_spelling_or_through_a_merge_key_fails_closed(string matrix) => Assert.NotEmpty(Check($$$"""
+        name: ci
+        on: [push]
+        jobs:
+          anchors:
+            runs-on: ubuntu-latest
+            strategy: { matrix: { a: [&row { os: ab-ci }], b: [&rows { include: [{ os: ab-ci }] }] } }
+            steps:
+              - run: echo hi
+          product:
+            strategy: { matrix: {{{matrix}}} }
+            runs-on: ${{ matrix.os }}
+            steps:
+              - run: echo hi
+        """));
 
-    [GeneratedRegex(@"\$productOs\s*\+?=(?!=)[^\n]*")]
-    private static partial Regex ProductOsWrite();
-    [GeneratedRegex(@"\$outputs\[\s*'product-os'\s*\]\s*=([^\n]*)")]
-    private static partial Regex ProductOsOutput();
-
+    // R8c (#4306 P3-1): a merge key at the root or under jobs: brings in jobs this check never reads.
+    [Theory]
+    [InlineData("<<: *base\nname: ci\non: [push]\njobs:\n  product:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n")]
+    [InlineData("name: ci\non: [push]\njobs:\n  <<: *base\n  product:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n")]
+    public void A_merge_key_at_the_root_or_under_jobs_fails_closed(string rest)
+        => Assert.NotEmpty(Check("x-base: &base { ab: { runs-on: ab-ci, steps: [{ run: echo hi }] } }\n" + rest.Replace("\\n", "\n")));
+    // R4zzB858 P3: an include row's own merge-key check, apart from the job's: the matrix itself is not hosted.
+    [Fact]
+    public void An_include_row_with_a_merge_key_makes_the_matrix_not_hosted() => Assert.Contains(Check($$$"""
+        name: ci
+        on: [push]
+        jobs:
+          anchors: { runs-on: ubuntu-latest, strategy: { matrix: { a: [&row { os: windows-latest }] } }, steps: [{ run: echo hi }] }
+          product: { strategy: { matrix: { os: [ubuntu-latest], include: [{ <<: *row }] } }, runs-on: "${{ matrix.os }}", steps: [{ run: echo hi }] }
+        """), p => p.Contains("matrix.os is reached without it", StringComparison.Ordinal));
+    [Fact]
+    public void A_job_that_takes_its_runner_through_a_merge_key_fails_closed() => Assert.NotEmpty(Check("""
+        name: ci
+        on: [push]
+        jobs:
+          anchors:
+            runs-on: ubuntu-latest
+            strategy: { matrix: { a: [&base { runs-on: ab-ci }] } }
+            steps:
+              - run: echo hi
+          product:
+            <<: *base
+            steps:
+              - run: echo hi
+        """));
     [GeneratedRegex(@"\$runners\s*=\s*\[ordered\]@\{([^}]*)\}")]
     private static partial Regex RunnersMap();
     [GeneratedRegex(@"=\s*'([^']*)'")]

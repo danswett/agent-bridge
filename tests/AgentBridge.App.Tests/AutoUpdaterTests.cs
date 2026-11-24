@@ -1552,6 +1552,43 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(time.GetUtcNow() < WindowOpens);
     }
 
+    // #4509's review (P2): the gap path itself, outside the window. A session goes idle and the gap settles: unasked, nothing installs.
+    // The settle timer's posted tick is kept (Recording), so the ticks here are the ones that act, not one racing the asserts.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Set_to_install_between_turns_a_settled_gap_outside_the_update_window_installs_nothing()
+    {
+        InstallBetweenTurns();
+        DefaultWindow();
+        updaterUi = new Recording([]);
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        await GoIdleAsync("s1");
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await auto.TickAsync();
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains("waits for the update window 02:00-05:00 Pacific Time", auto.State.Waiting);
+    }
+
+    // #4509's review (P3): Update now is a person's press, and goes outside the window as inside it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_outside_the_update_window_installs_at_once()
+    {
+        DefaultWindow();
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        Departs(Committed);
+
+        await NowAsync(accept: OneTurn);
+
+        Assert.True(updater.Applied);
+        Assert.True(time.GetUtcNow() < WindowOpens);
+    }
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1623,6 +1660,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await QuietTicksAsync(2);
         await Wait.UntilAsync(() => updater.Applied, "the install inside the person's window", TimeSpan.FromSeconds(5));
     }
+
 
     // #3307: unasked, nothing installs over bad-release protection this machine could not check
     // (stale or unreadable); it holds and says why. A fresh policy installs as before.

@@ -50,6 +50,10 @@ public class CatalogTests
     [InlineData("spikes/s6-tpm-keys/src/DeviceKeys.cs", "pwa-e2e")]
     // Embedded in App.Core for the demo the app job's self-test runs (#487).
     [InlineData("docs/protocol/examples/sessions-list.json", "app-package")]
+    // The Pages rollback fence and its test file (#4425, #4437): quality/** is a global trigger, so a change to either runs the whole ring, quality-tool (these tests' own suite) included;
+    // they need no triggers line of their own (#4451), and these rows are what would notice if that stopped being true.
+    [InlineData("quality/pages-rollback.ps1", "quality-tool")]
+    [InlineData("quality/test-pages-gate.ps1", "quality-tool")]
     public void A_file_a_job_checks_from_outside_its_folders_selects_that_suite_in_the_repository_catalog(string file, string suite)
     {
         var root = AppContext.BaseDirectory;

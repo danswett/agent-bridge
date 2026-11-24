@@ -103,11 +103,12 @@ Check 'wiring: a missing Arm64 SBOM makes it incomplete' (Gather @($rowPush) ($g
 Check 'wiring: a missing x64 package makes it incomplete' (Gather @($rowPush) ($good | Where-Object { $_ -ne 'agent-bridge-windows-0.1.103' })).Full.ArtifactsUnexpired $false
 Check 'wiring: more than a page of unrelated artifacts does not hide the packages' (Gather @($rowPush) (@(1..150 | ForEach-Object { "logs-$_" }) + $good)).Full.ArtifactsUnexpired $true
 Check 'wiring: a FULL run whose head_sha is another commit is not this commit''s' ((Gather @("200`tsuccess`tshaOther`tpush`tmain") $good).Full -eq $null) $true
-Check 'wiring: a workflow_dispatch run is not accepted (it fails closed)' ((Gather @("200`tsuccess`tsha103`tworkflow_dispatch`tmain") $good).Full -eq $null) $true
+Check 'wiring: a by-hand (workflow_dispatch) run on main at the commit is accepted' ((Gather @("200`tsuccess`tsha103`tworkflow_dispatch`tmain") $good).Full -ne $null) $true
+Check 'wiring: a by-hand run on a BRANCH at the commit is not accepted' ((Gather @("200`tsuccess`tsha103`tworkflow_dispatch`tfeature") $good).Full -eq $null) $true
 Check 'wiring: a scheduled run is not accepted' ((Gather @("200`tsuccess`tsha103`tschedule`tmain") $good).Full -eq $null) $true
 Check 'wiring: a run on another branch is not accepted' ((Gather @("200`tsuccess`tsha103`tpush`tfeature") $good).Full -eq $null) $true
 Check 'wiring: a workflow_run run on main is accepted' ((Gather @("200`tsuccess`tsha103`tworkflow_run`tmain") $good).Full -ne $null) $true
-Check 'wiring: the first valid row is used when a newer one is not' ((Gather @("201`tfailure`tsha103`tworkflow_dispatch`tmain", $rowPush) $good).Full.Id) '200'
+Check 'wiring: the first valid row is used when a newer one is not' ((Gather @("201`tfailure`tsha103`tworkflow_dispatch`tfeature", $rowPush) $good).Full.Id) '200'
 Check 'wiring: no FULL run at all is no Full' ((Gather @() $good).Full -eq $null) $true
 Check 'an Arm64 pack that was skipped is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
 Check 'an Arm64 installer that failed is still publishable: it installs and starts the app, the Arm64 self-test the owner waived (#4159)' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
@@ -178,6 +179,21 @@ Check "a null descendant answer is not a yes" ((Select-ReleaseCommit -Runs @((Ru
 Check "signing unset may publish" (Signed "") "published"
 foreach ($v in "True", "TRUE", " true", "true ", "yes", "1") { Check "signing $v refuses" (Signed $v) "refused" }
 foreach ($v in "false", "False", " FALSE ", $null) { Check "signing $v may publish" (Signed $v) "published" }
+
+# A FULL run counts for a commit by its head_sha, a main branch and an event of this repository's own: a push, a workflow_run, or a run BY HAND on main (a workflow_run run reports the default
+# branch's tip as its head_sha, so only a by-hand run on main names an older commit; Pages needs it to deploy one). A by-hand run on a BRANCH never counts: no one may deploy a branch's PWA by
+# dispatching FULL on it (#4503, Q10's condition B).
+$sha = 'a' * 40; $other = 'b' * 40
+function Row([string]$evt, [string]$branch, [string]$head = $sha, [string]$repo = '') { $r = "9`tsuccess`t$head`t$evt`t$branch"; if ($repo) { $r += "`t$repo" }; $r }
+foreach ($evt in 'push', 'workflow_run', 'workflow_dispatch') { Check "a FULL $evt run on main at the commit counts" ((Select-FullRunRow @(Row $evt 'main') $sha).Id) '9' }
+Check 'a by-hand FULL run on a BRANCH at the commit is ignored' (Select-FullRunRow @(Row 'workflow_dispatch' 'topic') $sha) $null
+Check 'a by-hand FULL run on a branch NAMED like main but with a prefix is ignored' (Select-FullRunRow @(Row 'workflow_dispatch' 'refs/heads/main') $sha) $null
+Check 'a by-hand FULL run on main at ANOTHER commit is ignored' (Select-FullRunRow @(Row 'workflow_dispatch' 'main' $other) $sha) $null
+foreach ($evt in 'pull_request', 'pull_request_target', 'schedule', 'merge_group', '') { Check "a FULL '$evt' run is ignored" (Select-FullRunRow @(Row $evt 'main') $sha) $null }
+Check 'a by-hand run of a fork on main is ignored' (Select-FullRunRow @(Row 'workflow_dispatch' 'main' $sha 'evil/r') $sha 'o/r') $null
+Check 'a by-hand run of this repository on main counts when the row names its repository' ((Select-FullRunRow @(Row 'workflow_dispatch' 'main' $sha 'o/r') $sha 'o/r').Id) '9'
+Check 'a row that names a repository is ignored when none is given to compare with' (Select-FullRunRow @(Row 'workflow_dispatch' 'main' $sha 'o/r') $sha) $null
+Check 'the first row that counts wins: a branch run before a main run is skipped' ((Select-FullRunRow @((Row 'workflow_dispatch' 'topic'), (Row 'workflow_dispatch' 'main')) $sha).Id) '9'
 
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'all passed'
