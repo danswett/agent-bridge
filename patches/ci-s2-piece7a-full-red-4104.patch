@@ -1,21 +1,24 @@
-From af225efd2168eabc8f9b20de450d4c0ac4620e01 Mon Sep 17 00:00:00 2001
+From 34b90e11880c844c600acedf8f01ed34e98e070c Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
 Date: Mon, 23 Nov 2026 17:19:09 -0800
 Subject: [PATCH] CI S2, piece 7a: full-red.yml runs full-red.ps1 after each
  Full run (Part of #4104)
 
-The workflow (a workflow_run of Full on main, issues: write), the ci.yml light step that runs the script's offline test, the
-catalog suite flipped to exists and naming full-red.yml report, and Full red in the merge rule's exclusion list (it cannot
-reach a pull request's head).
+The workflow: a workflow_run of Full on main, guarded to this repository's own run made by workflow_run or by hand (a fork's pull request
+whose branch is named main also matches the branches filter), queued (queue: max) so a burst drops no alert, issues: write only. The
+ci.yml light step that runs the script's offline test, the catalog suite flipped to exists and naming full-red.yml report, Full red in
+the merge rule's exclusion list, and FullRedWorkflowTests (the if: against a fork, a pull_request run, push, another branch).
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
- .github/workflows/ci.yml                      |  6 +++
- .github/workflows/full-red.yml                | 38 +++++++++++++++++++
- quality/catalog.yml                           |  6 +--
+ .github/workflows/ci.yml                      |  6 ++
+ .github/workflows/full-red.yml                | 47 +++++++++++++++
+ quality/catalog.yml                           |  6 +-
+ .../FullRedWorkflowTests.cs                   | 58 +++++++++++++++++++
  .../MergeRuleTests.cs                         |  3 +-
- 4 files changed, 48 insertions(+), 5 deletions(-)
+ 5 files changed, 115 insertions(+), 5 deletions(-)
  create mode 100644 .github/workflows/full-red.yml
+ create mode 100644 tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
 
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 index 17f2db33c..cad5bdcaa 100644
@@ -43,14 +46,14 @@ index 17f2db33c..cad5bdcaa 100644
          if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
 diff --git a/.github/workflows/full-red.yml b/.github/workflows/full-red.yml
 new file mode 100644
-index 000000000..c2049578d
+index 000000000..065b2f48d
 --- /dev/null
 +++ b/.github/workflows/full-red.yml
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,47 @@
 +name: Full red
 +
-+# The alert for a red FULL lane (quality/README.md section 4.7; S2, #4104): one issue per commit, labelled full-red, listing the red
-+# jobs, the blocking ones apart from the Arm64 results the owner waived. It never holds a merge and fails nothing.
++# The alert for a red FULL lane (quality/README.md section 4.7; S2, #4104): one open issue per red job, labelled full-red, a comment on it for each later
++# red commit, the blocking jobs apart from the Arm64 results the owner waived. It never holds a merge.
 +on:
 +  # Reads a finished Full run on main only; runs main's copy of the script and never checks out the run's code.
 +  workflow_run: # zizmor: ignore[dangerous-triggers]
@@ -61,12 +64,21 @@ index 000000000..c2049578d
 +permissions:
 +  contents: read
 +
++# Queued, not dropped: with a plain group GitHub keeps one pending run and drops the rest, and a dropped run is a dropped alert. One at a time, so two runs
++# never race to open the same job's issue.
 +concurrency:
 +  group: full-red
++  queue: max
 +  cancel-in-progress: false
 +
 +jobs:
 +  report:
++    # Only this repository's own Full run on main, made by workflow_run or by hand: the branches filter alone also matches a fork's pull request whose
++    # branch is named main. (Full's own event is workflow_run, not push, which main-red's CI-watching guard tests.) The script checks the same.
++    if: >-
++      github.event.workflow_run.head_repository.full_name == github.repository &&
++      github.event.workflow_run.head_branch == 'main' &&
++      (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')
 +    runs-on: ubuntu-latest
 +    timeout-minutes: 5
 +    permissions:
@@ -78,7 +90,7 @@ index 000000000..c2049578d
 +        with:
 +          persist-credentials: false
 +          sparse-checkout: quality
-+      - name: Open or update the commit's issue when a FULL job is red
++      - name: Open or update each red job's issue
 +        shell: pwsh
 +        env:
 +          GH_TOKEN: ${{ github.token }}
@@ -87,7 +99,7 @@ index 000000000..c2049578d
 +        run: pwsh -NoProfile -File quality/full-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
 \ No newline at end of file
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index f026c2715..2b3722033 100644
+index 5f966a022..7a8e1260a 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -620,10 +620,8 @@ suites:
@@ -103,8 +115,72 @@ index f026c2715..2b3722033 100644
  
    - id: arm64-waiver-script
      validation_plan: native
+diff --git a/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
+new file mode 100644
+index 000000000..a6407371a
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
+@@ -0,0 +1,58 @@
++using YamlDotNet.RepresentationModel;
++
++namespace AgentBridge.Quality.Tests;
++
++/// <summary>
++/// full-red.yml (S2, #4104): the alert for a red FULL lane. It reads a finished Full run and opens issues, so it must act only on this repository's own
++/// run of main that Full's triggers can make, never on a fork's, and must queue its runs so a burst of completions drops no alert.
++/// </summary>
++public class FullRedWorkflowTests
++{
++    static YamlMappingNode Workflow()
++    {
++        var stream = new YamlStream();
++        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "full-red.yml"))));
++        return (YamlMappingNode)stream.Documents[0].RootNode;
++    }
++
++    static YamlMappingNode Report() => (YamlMappingNode)((YamlMappingNode)Workflow()["jobs"])["report"];
++
++    [Theory]
++    [InlineData("o/r", "workflow_run", "main", true)]
++    [InlineData("o/r", "workflow_dispatch", "main", true)]
++    [InlineData("evil/r", "workflow_run", "main", false)]
++    [InlineData("evil/r", "pull_request", "main", false)]
++    [InlineData("o/r", "pull_request", "main", false)]
++    [InlineData("o/r", "push", "main", false)]
++    [InlineData("o/r", "workflow_run", "feature", false)]
++    public void The_job_runs_only_for_this_repositorys_own_Full_run_on_main_started_by_workflow_run_or_by_hand(string repo, string eventName, string branch, bool runs)
++    {
++        var condition = ((YamlScalarNode)Report()["if"]).Value!.Trim();
++        if (condition.StartsWith("${{", StringComparison.Ordinal)) condition = condition[3..^2].Trim();
++
++        var got = MergeRuleTests.IfExpression.Evaluate(condition, new Dictionary<string, string?>
++        {
++            ["github.repository"] = "o/r",
++            ["github.event.workflow_run.head_repository.full_name"] = repo,
++            ["github.event.workflow_run.event"] = eventName,
++            ["github.event.workflow_run.head_branch"] = branch,
++        });
++
++        Assert.Equal(runs, got);
++    }
++
++    [Fact]
++    public void It_watches_Full_on_main_queues_its_runs_and_holds_only_the_permissions_the_alert_needs()
++    {
++        var on = (YamlMappingNode)Workflow()["on"];
++        var run = (YamlMappingNode)on["workflow_run"];
++        var concurrency = (YamlMappingNode)Workflow()["concurrency"];
++        var permissions = (YamlMappingNode)Report()["permissions"];
++
++        Assert.Equal(["workflow_run"], on.Children.Keys.Select(k => k.ToString()));
++        Assert.Equal(["Full"], ((YamlSequenceNode)run["workflows"]).Children.Select(c => c.ToString()));
++        Assert.Equal(["main"], ((YamlSequenceNode)run["branches"]).Children.Select(c => c.ToString()));
++        Assert.Equal(("full-red", "max", "false"), (concurrency["group"].ToString(), concurrency["queue"].ToString(), concurrency["cancel-in-progress"].ToString()));
++        Assert.Equal(["actions: read", "contents: read", "issues: write"], permissions.Children.Select(p => $"{p.Key}: {p.Value}").Order(StringComparer.Ordinal));
++    }
++}
 diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
-index d36aad039..5d959a354 100644
+index 6777ce769..24eb9202e 100644
 --- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 @@ -1065,11 +1065,12 @@ public class MergeRuleTests
