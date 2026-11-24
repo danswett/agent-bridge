@@ -417,7 +417,7 @@ public sealed partial class ReplyService : ISessionReplier
         // refused here: a screen without one may be asking something (a permission prompt, or
         // the folder-trust question before a transcript exists), which the checks in the turn
         // name better, and still refuse before any key.
-        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } occupied && request.ClearConfirmation is null) { return Done(Unverified(early, occupied.State)); }
+        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } occupied && request.ClearConfirmation is null) { return Done(Unverified(early, occupied.State) with { Input = InputOf(occupied.State, request) }); }
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
@@ -496,7 +496,7 @@ public sealed partial class ReplyService : ISessionReplier
             Func<string?>? clearFence = null;
             if (box is null)
             {
-                if (request.ClearConfirmation is null) { return Done(Unverified(problem!, state)); }
+                if (request.ClearConfirmation is null) { return Done(Unverified(problem!, state) with { Input = InputOf(state, request) }); }
                 (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear, Freshness);
                 if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(problem!)); }
             }
@@ -1067,6 +1067,19 @@ public sealed partial class ReplyService : ISessionReplier
         Refusal = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 }
             ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
     };
+
+    // What the refused person is shown of the box (#804 slice 2): only a person's own reply, only a plain or shell box read whole on the screen. Escaped,
+    // cut to ShownLength, with the digest of the whole escaped text. Never clearable until a clear can be confirmed (later slice).
+    static ReplyInput? InputOf(CopilotInputBoxState? box, ReplyRequest request)
+    {
+        if (request.Intent != ReplyIntent.Steer || box is not { Main: true, Complete: true } || box.Vim == CopilotVimMode.Normal || !box.Shell && box.Content.Length == 0) { return null; }
+        var (shown, marks) = ShownText.RevealMarked(box.Content, rightToLeft: true);
+        var cut = shown.Length <= CopilotInputBoxReader.ShownLength ? shown.Length : char.IsHighSurrogate(shown[CopilotInputBoxReader.ShownLength - 1]) ? CopilotInputBoxReader.ShownLength - 1 : CopilotInputBoxReader.ShownLength;
+        // A cut inside an escape the host wrote would leave half of it looking like the person's own text: stop before it.
+        foreach (var m in marks) { if (m.Start < cut && m.Start + m.Length > cut) { cut = m.Start; } }
+        return new ReplyInput(shown[..cut], [.. marks.Where(m => m.Start + m.Length <= cut).Select(m => (IReadOnlyList<int>)[m.Start, m.Length])],
+            cut < shown.Length, box.Shell ? "shell" : "text", EscapedApproval.Shown(shown), false);
+    }
 
     string Logged(string what, Exception e)
     {

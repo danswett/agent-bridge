@@ -1081,6 +1081,15 @@ foreign replay receives no escrow or progress. There is no wire confirmation fie
 production clear producer or capability in this cut. Signed person relay confirmation,
 policy and PWA/app presentation follow separately; existing clients are unchanged.
 
+A reply refused because Copilot's input box holds a draft, or is in shell mode, adds optional
+`input: { text, marks, truncated, mode, digest, clearable }` ([#804](https://github.com/danswett/agent-bridge/issues/804)
+slice 2): the box as the screen shows it, escaped like `cleared` (host-only `[start, length]` marks in UTF-16
+units), cut to 500 characters with `truncated` set, `mode` `"text"` or `"shell"`, and `digest`, the lowercase-hex SHA-256 of the
+whole escaped text. It is returned only to a person's own reply (a person's device or the local app or host CLI), never to an
+agent, the pipe's other callers, MCP or Home Assistant, and only when the box was read whole on the screen. `clearable` is
+always `false` in this cut: no clear can be confirmed or offered yet, so the digest is informational. Existing clients ignore the
+field and still show `reason`; no new operation, permission or capability.
+
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
 request's attachment order. It is returned only for **delivered Copilot and Claude**

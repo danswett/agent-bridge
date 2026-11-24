@@ -909,6 +909,11 @@ public sealed record ReplyRequest
 
 public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated = false);
 
+// What a refused reply found in Copilot's input box at the machine (#804): the box as the screen shows it, escaped with host-only [start, length]
+// marks in UTF-16 units and cut to 500 characters (Truncated), the box's mode ("text" or "shell"), and the SHA-256 (hex) of the whole escaped text.
+// Shown only to a person's device; Clearable is false until a clear can be confirmed and offered.
+public sealed record ReplyInput(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated, string Mode, string Digest, bool Clearable);
+
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
@@ -919,11 +924,12 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
     public ClearedComposer? Cleared { get; init; }
+    public ReplyInput? Input { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public ReplyRefusal Refusal { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
-    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments) && Equals(Cleared, other.Cleared);
-    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments, Cleared);
+    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments) && Equals(Input, other.Input) && Equals(Cleared, other.Cleared);
+    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments, Cleared, Input);
 }
 
 [UnknownAs(Other)]
