@@ -20,6 +20,13 @@ decision is an authenticated device's signed answer.
   verdict;
 - gives **no verdict after the deadline** (100 s, below the hook's timeout) and a late answer is `Unknown`;
 - refuses a command longer than the 300-character preview as `Truncated` (the person would see a prefix of what they approve);
+- is **bound to the command shown** (#958): the answer carries the digest (lower-case SHA-256 hex) of the exact text the person was shown, and an answer
+  for any other command is refused as `Shown` and does not settle the prompt; a second `Register` for a session and request that is still waiting is
+  **refused** (it returns nothing), never a replacement, so the prompt on screen cannot be swapped under the person. The text passed to `Register` and
+  digested is the text **after the surface's escaping**, which can be longer than the raw command; the broker does no escaping, so PR B and C must pass
+  exactly what the person sees, and the 300-character rule applies to that text;
+- checks the deadline itself when an answer arrives, so a delayed timer callback cannot let a late answer through; a wait that is not finite and positive
+  is refused when the broker is built;
 - refuses a verdict other than exactly `allow` or `deny`; `Withdraw(session)` ends a session's waits with no verdict.
 
 **Not in this PR:** no pipe op, no hook change, no registration, no tracker listing, no app or push; **nothing constructs the broker** (a test pins
