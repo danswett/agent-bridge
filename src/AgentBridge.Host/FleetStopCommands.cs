@@ -23,6 +23,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
         System.Text.Encoding.UTF8.GetBytes($"fleet.end/1|{i.Request}|{i.Grant}|{i.Session}|{i.Target}")));
     readonly GrantStore store = new(folder, key, new(folder), new([], [], [], [], [], [], [], []));
     readonly AgentAuditLog audit = new(folder);
+    readonly LocalApi.RefusalAudits refusals = new(TimeProvider.System);
     readonly SemaphoreSlim serial = new(1);
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true };
@@ -34,6 +35,14 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
     // A remote stop always names a grant: ending on the host's own launch record alone is local-only.
     internal Task<FleetStopReceipt> HandleRemoteAsync(GrantSubject subject, JsonElement data) =>
         HandleCoreAsync(new(AgentProtocol.Principal(subject.SourceHost, subject.Session), [], "relay", null, subject), data);
+    // A refusal after the envelope verified is the peer device's own refused use: one refused audit row through the same function and hourly
+    // limiter as every other refused stop; if the row cannot be written, that is the refusal (as for the launch receiver).
+    internal string AuditRemoteRefusal(string device, FleetStopInput input, string reason)
+    {
+        try { LocalApi.AuditRefusal(AgentProtocol.Principal(device, "unmatched"), [], Ops.SessionStop, JsonSerializer.SerializeToElement(input, ProtocolJson.Options), audit, reason, refusals); }
+        catch (InvalidOperationException) { return "audit-unavailable"; }
+        return reason;
+    }
     sealed record StopCaller(string Principal, string[] Chain, string Path, AgentCredential? Credential, GrantSubject? Remote);
     GrantSubject RemoteSubject(GrantSubject s) => account() is { Length: > 0 } mine && s.Account == mine && s.SourceHost != device
         && s.SourceHost.Length == 32 && s.SourceHost.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')

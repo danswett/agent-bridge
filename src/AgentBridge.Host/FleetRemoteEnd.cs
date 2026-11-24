@@ -11,8 +11,9 @@ namespace AgentBridge.Host;
 // this account, in the same fixed order as FleetRemoteLaunch and with every refusal before any side effect: own-peer trust, per-peer
 // rate cap, envelope verify (action fleet.end), request binding, replay with the restart warm-up, then the receiving host's own grant
 // is the authority through the shared stop gate (FleetStopCommands), which audits, counts and stops without force or confirmation.
-public sealed class FleetRemoteEnd(FleetStopCommands stop, GrantStore grants, TimeProvider? clock = null, DateTimeOffset? startedAt = null)
+public sealed class FleetRemoteEnd(FleetStopCommands stop, GrantStore grants, ILiteMode mode, TimeProvider? clock = null, DateTimeOffset? startedAt = null)
 {
+    readonly ILiteMode gate = mode ?? throw new ArgumentNullException(nameof(mode));
     public const string Op = FleetStopCommands.Op;
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly RateCap rates = new(clock ?? TimeProvider.System);
@@ -20,6 +21,8 @@ public sealed class FleetRemoteEnd(FleetStopCommands stop, GrantStore grants, Ti
 
     public async Task<FleetStopReceipt> ReceiveAsync(LiteChannel channel, JsonElement data)
     {
+        // The lite kill (ILiteMode.On, the same switch as lite messaging) turns remote end off, before any parse or side effect, like FleetRemoteLaunch.
+        if (!gate.On) { return Refuse("kill-switch"); }
         if (channel.Untrusted is not null || !rates.Allow(channel.PeerId, Op)) { return Refuse("policy"); }
         FleetActionSigned signed; FleetStopInput input; JsonElement end; byte[] point = [];
         try
@@ -39,20 +42,23 @@ public sealed class FleetRemoteEnd(FleetStopCommands stop, GrantStore grants, Ti
         var now = time.GetUtcNow();
         FleetActionBody action;
         try { action = FleetActionEnvelope.Verify(signed, point, channel.Account, channel.PeerId, channel.Self, now, FleetActionEnvelope.EndAction); }
-        catch (InvalidDataException) { return Refuse("policy", input); }
+        catch (InvalidDataException) { return Refuse("policy", input); }  // not verified: nothing is written for an unauthenticated peer
         if (action.GrantId != input.Grant.ToString("D") || action.Request != input.Request
             || action.PayloadSha256 != FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options))
-            || !replays.TryAdd(action, now)) { return Refuse("policy", input); }
+            || !replays.TryAdd(action, now)) { return Refuse("policy", input, channel.PeerId); }
 
         var found = grants.TryGetUsable(input.Grant);
-        if (!found.Usable) { return Refuse(FleetGrantLaunch.StoreReason(found.Problem), input); }
+        if (!found.Usable) { return Refuse(FleetGrantLaunch.StoreReason(found.Problem), input, channel.PeerId); }
         // The envelope's generation is diagnostic only: the stop gate checks the generation this host's own store holds.
         var subject = found.Grant!.Subjects.FirstOrDefault(s => s.Account == action.Account && s.SourceHost == action.SourceDevice
             && FleetActionEnvelope.SubjectDigest(s.Account, s.SourceHost, s.Session, s.Credential, s.ProcessInstance.Pid,
                 s.ProcessInstance.StartedAt.UtcTicks) == action.Subject);
-        return subject is null ? Refuse("scope", input) : await stop.HandleRemoteAsync(subject, end);
+        return subject is null ? Refuse("scope", input, channel.PeerId) : await stop.HandleRemoteAsync(subject, end);
     }
 
-    static FleetStopReceipt Refuse(string reason, FleetStopInput? input = null) =>
-        new(input?.Request ?? Guid.Empty, input?.Grant ?? Guid.Empty, 0, "refused", reason);
+    // Before the envelope verified the caller is not authenticated, so nothing is written for it (a peer cannot fill the audit by sending junk).
+    // From verification on it is the peer device, and every refusal is audited (fleet-grants.md, "Audit and threats"): pass its id.
+    FleetStopReceipt Refuse(string reason, FleetStopInput? input = null, string? verifiedPeer = null) =>
+        new(input?.Request ?? Guid.Empty, input?.Grant ?? Guid.Empty, 0, "refused",
+            verifiedPeer is not null && input is not null ? stop.AuditRemoteRefusal(verifiedPeer, input, reason) : reason);
 }
