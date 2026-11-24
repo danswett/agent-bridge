@@ -41,6 +41,14 @@
 # PLAYWRIGHT_APT_* paths and limits exist for test.sh's stand-ins; the action sets neither.
 set -euo pipefail
 
+# One deadline for the whole step. Every wait below is bounded, but they ADD UP across update, prefetch and apt's retries, so no new attempt starts after this many
+# seconds into the step (SECONDS is the script's own clock), and the prefetch budget is at most half of what is left. The worst case, from the defaults:
+#   deadline 600 + the longest single attempt that may still start (apt: its 180 s limit + 30 s kill grace = 210; a fetch: 60 s + 10 s connect = 70) = 810 s,
+#   then the plan call (60) and the offline install (180): 1050 s (17.5 min). The jobs that call this have a 35 min cap and need 15 min for their own work
+#   (npm ci, browsers, tests), so the worst case fits with 3 min to spare; test.sh computes it from these defaults and the callers' timeout-minutes.
+deadline=${PLAYWRIGHT_APT_DEADLINE:-600}
+deadline_hit=false
+
 key_only=false
 if [ "${1:-}" = --cache-key ]; then key_only=true; shift; fi
 if [ "$#" -eq 0 ]; then
@@ -165,6 +173,10 @@ retry() {
     if [ "$phase" = update ] && grep -qE '^[EW]: Failed to fetch (https://packages\.microsoft\.com/|.* 429([[:space:]]|$))' "$log"; then
       strict=true
     fi
+    if [ "$SECONDS" -ge "$deadline" ] && [ "$n" -lt "$max" ]; then
+      deadline_hit=true; network_failed=true
+      echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::the step's ${deadline} s deadline is spent after attempt $n of $max; no further attempt is started"; break
+    fi
     if { [ "$strict" = false ] && [ "$left_azure" = false ] && { [ "$rc" -eq 124 ] || grep -qiE 'Temporary failure resolving|Could not resolve' "$log"; }; } || [ "$n" -ge "$max" ]; then
       network_failed=true; break
     fi
@@ -207,6 +219,7 @@ cause() {
 fail() {
   local why; why=$(cause "$2" "${3:-packages}")
   [ "$cache_failed" = false ] || why+="; the restored cache had failed verification against the signed indexes and was discarded"
+  [ "$deadline_hit" = false ] || why+="; the step's ${deadline} s deadline was spent, so no further attempt was started"
   echo "::error::apt $1 failed (exit $2): $why; see the attempt log above"; exit "$2"
 }
 
@@ -291,11 +304,13 @@ fi
 # fallback proof (apt's own Get: lines are the proof there) and not past PLAYWRIGHT_APT_PREFETCH_BUDGET seconds in all.
 fetch_tries=${PLAYWRIGHT_APT_FETCH_TRIES:-3}
 fetch_timeout=${PLAYWRIGHT_APT_FETCH_TIMEOUT:-60}
-prefetch_budget=${PLAYWRIGHT_APT_PREFETCH_BUDGET:-600}
+prefetch_budget=${PLAYWRIGHT_APT_PREFETCH_BUDGET:-400}
 prefetch() {
   [ "${PLAYWRIGHT_APT_PREFETCH:-true}" = true ] && [ "$force" = false ] || return 0
   local plan work_dir uri file size hash extra rel base mapped bases=() urls=() left=() sticky=0 planned=0 fetched=0 i try idx nb started=$SECONDS spent=false got
-  if [ "$prefetch_budget" -le 0 ]; then
+  local left_time=$((deadline - SECONDS)) budget=$prefetch_budget
+  [ "$budget" -le $((left_time / 2)) ] || budget=$((left_time / 2))
+  if [ "$budget" -le 0 ]; then
     echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the prefetch budget is spent before it began; apt downloads every package"; return 0
   fi
   plan=$(mktemp -d); work_dir=$(mktemp -d)
@@ -313,7 +328,7 @@ prefetch() {
     if [ -f "$apt_archives/$file" ] && [ "$(wc -c < "$apt_archives/$file")" -eq "$size" ] && printf '%s  %s\n' "${hash#SHA256:}" "$apt_archives/$file" | sha256sum --check --status; then
       fetched=$((fetched + 1)); continue
     fi
-    if [ "$spent" = true ] || [ $((SECONDS - started)) -ge "$prefetch_budget" ]; then spent=true; left+=("$file"); continue; fi
+    if [ "$spent" = true ] || [ $((SECONDS - started)) -ge "$budget" ]; then spent=true; left+=("$file"); continue; fi
     rel=${uri#\'}; rel=${rel%\'}; urls=()
     # What apt prints is not always a URL curl can fetch: on the runner images apt's sources are mirror+file:/etc/apt/apt-mirrors.txt, and --print-uris prints that
     # UNRESOLVED URI (mirror+file:/etc/apt/apt-mirrors.txt/pool/main/...deb). It is mapped onto the mirror list (the same rotation), as is an http(s) URI that names
@@ -334,6 +349,8 @@ prefetch() {
     for base in "${urls[@]}"; do
       idx=${base%%|*}; base=${base#*|}
       for ((try = 1; try <= fetch_tries; try++)); do
+        # the budget is checked before every try, not only every package, so one package cannot run past it by more than a single try
+        if [ $((SECONDS - started)) -ge "$budget" ]; then spent=true; break 2; fi
         if curl --fail --silent --show-error --location --connect-timeout 10 --max-time "$fetch_timeout" --speed-limit 1024 --speed-time "$stall_seconds" -o "$work_dir/$file" "$base" 2>/dev/null </dev/null &&
           [ "$(wc -c < "$work_dir/$file")" -eq "$size" ] && printf '%s  %s\n' "${hash#SHA256:}" "$work_dir/$file" | sha256sum --check --status; then
           got=true; break 2
@@ -350,7 +367,7 @@ prefetch() {
   done < "$plan/uris"
   sudo rm -rf -- "$plan" "$work_dir"
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::fetched $fetched of $planned planned packages one by one, each checked against the signed index"
-  [ "$spent" = false ] || echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the prefetch budget ($prefetch_budget s) ran out; the rest is left to apt"
+  [ "$spent" = false ] || echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the prefetch budget ($budget s) ran out; the rest is left to apt"
   [ "${#left[@]}" -eq 0 ] || echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::left to apt's own bounded download: ${left[*]}"
   return 0
 }

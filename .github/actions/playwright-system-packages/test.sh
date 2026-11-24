@@ -189,7 +189,7 @@ reset() {
   unset DEBS_CACHE_HIT DEBS_CACHE_EXACT_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
   unset APT_CHAIN_SOURCE APT_TRUSTED_RELEASE APT_CHAIN_INSTALLED
-  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES
+  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES PLAYWRIGHT_APT_DEADLINE
   export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false; rm -rf "$CURL_FIXTURES"; mkdir -p "$CURL_FIXTURES"; : > "$CURL_LOG"; : > "$CURL_ARGS"
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
@@ -324,7 +324,33 @@ uri_cases() {
   check "a mirror+file URI is mapped onto the mirror list and rotates when a mirror is down, as a real runner needs" 0 "$calls" "$azure" "$canonical"
   expect "it was fetched, from Canonical after Azure failed, and the summary counts it" '[ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/liba_1_amd64.deb")" = "package a" ] && grep -q "fetched 1 of 1 planned packages" "$work/out"'
 }
-robust_cases() { index_cases; prefetch_cases; uri_cases; cause_cases; stall_cases; }
+# The worst case of the whole step (review P2 on #4410). Every wait is bounded, but they ADD UP across update, prefetch and apt's retries, so the step has one deadline:
+# no new attempt starts after PLAYWRIGHT_APT_DEADLINE seconds, and the prefetch budget is at most half of what is left. The arithmetic, from the defaults themselves:
+#   the step ends by  deadline + the longest single attempt that may still start (apt: its limit + 30 s kill grace; a fetch: --max-time + 10 s connect) + the plan call (60)
+#   + the offline install (180), and that plus the time the job's own work needs (900: npm ci, browsers, tests) must fit the SMALLEST timeout-minutes of a job that calls the action.
+deadline_cases() {
+  local deadline limit fetch longest worst job_limit
+  deadline=$(sed -n 's/^deadline=\${PLAYWRIGHT_APT_DEADLINE:-\([0-9]*\)}.*/\1/p' "$here/download.sh")
+  limit=$(grep -o 'PLAYWRIGHT_APT_LIMIT:-[0-9]*s' "$here/download.sh" | grep -o '[0-9]*' | sort -n | tail -n 1)
+  fetch=$(sed -n 's/^fetch_timeout=\${PLAYWRIGHT_APT_FETCH_TIMEOUT:-\([0-9]*\)}.*/\1/p' "$here/download.sh")
+  job_limit=$(for f in ci.yml full.yml; do [ ! -f "$here/../../workflows/$f" ] || awk '
+    /^  [[:alnum:]_-]+:[[:space:]]*$/ { t = "" }
+    /^    timeout-minutes:/ { t = $2 }
+    /uses: \.\/\.github\/actions\/playwright-system-packages/ && t != "" { print t * 60 }' "$here/../../workflows/$f"; done | sort -n | head -n 1)
+  : "${job_limit:=2100}"
+  longest=$((limit + 30)); [ $((fetch + 10)) -le "$longest" ] || longest=$((fetch + 10))
+  worst=$((deadline + longest + 60 + 180))
+  expect "the step's defaults are readable (deadline ${deadline:-?} s, longest apt limit ${limit:-?} s, fetch ${fetch:-?} s)" '[ -n "$deadline" ] && [ -n "$limit" ] && [ -n "$fetch" ]'
+  expect "worst case $worst s (deadline $deadline + longest attempt $longest + plan 60 + install 180) plus 900 s for the job's own work fits its smallest cap ($job_limit s)" '[ "$((worst + 900))" -le "$job_limit" ]'
+  expect "the header shows the arithmetic" 'grep -q "worst case" "$here/download.sh"'
+  reset "$canonical"; export PLAYWRIGHT_APT_DEADLINE=0 PLAYWRIGHT_APT_ATTEMPTS=6 APT_DOWNLOAD_TIMEOUTS=99; dl
+  expect "no new attempt starts once the deadline is spent, and the error says so" '[ "$DL_CODE" -eq 124 ] && [ "$(grep -c -- "--download-only" "$APT_LOG")" -eq 1 ] && grep -q "^::error::apt download failed (exit 124): network or timeout.*deadline" "$work/out"'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_DEADLINE=0
+  dl
+  expect "the prefetch never outlasts the deadline: with none left it fetches nothing" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ] && grep -q budget "$work/out"'
+}
+robust_cases() { index_cases; prefetch_cases; uri_cases; cause_cases; stall_cases; deadline_cases; }
 if [ "${1:-}" = --robust ]; then
   robust_cases
   [ "$failures" -eq 0 ] || { echo "::error::$failures of download.sh's robust checks failed"; exit 1; }
@@ -608,6 +634,7 @@ for transition in completed timeout completed-after-timeout timeout-with-diagnos
   if (
     source <(sed -n '/^network_error()/,/^leave_azure()/p' "$here/download.sh" | sed '$d')
     update_deadline=0; attempts=3; delay=0; left_azure=false; network_host=azure.archive.ubuntu.com
+    deadline=600; deadline_hit=false   # retry() reads the step's deadline; this subshell sources only its functions
     unset PLAYWRIGHT_APT_ATTEMPTS
     export PLAYWRIGHT_APT_RETRY_DELAY=0
     sleep() { :; }
