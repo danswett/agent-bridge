@@ -1,0 +1,34 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 17f2db33..cc5f37f3 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -360,6 +360,16 @@ jobs:
+       # pull request, and one broken there would first fail main's build.
+       - run: dotnet build AgentBridge.slnx -c Release --nologo
+         timeout-minutes: 10
++      # S4 (#4104, quality/README.md CI speed): the verify-only gate for the test shards. Reads every built test assembly's methods from metadata alone (no test code runs) and fails
++      # unless each runs in exactly one shard of quality/test-shards.json, so a new look-alike class fails the pull request that adds it. Unprivileged: this job has no secrets.
++      - name: Verify the test shard plan
++        if: env.DOTNET_TARGET != '' && matrix.os == 'ubuntu-latest'
++        shell: bash
++        run: |
++          args=()
++          for dll in tests/*/bin/Release/net10.0/*.Tests.dll; do args+=(--dll "$dll"); done
++          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll shard-verify --plan quality/test-shards.json --max-seconds 120 "${args[@]}"
++        timeout-minutes: 5
+       - name: Save NuGet packages to main's cache
+         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
+         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 5b238dec..bdaa8a75 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -394,7 +394,7 @@ suites:
+     runner: hosted
+     command: dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll shard-verify --plan quality/test-shards.json --dll <each tests/*/bin/Release/net10.0/*.Tests.dll>
+     where: ci.yml product
+-    status: planned
++    status: exists
+ 
+   - id: flake-hunt
+     validation_plan: native
