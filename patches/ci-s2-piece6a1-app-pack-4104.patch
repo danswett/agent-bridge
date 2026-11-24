@@ -1,0 +1,239 @@
+From 953acf81e90d62ad16d39fd96a446f5e83cc502d Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 19:31:28 -0800
+Subject: [PATCH] CI S2, piece 6a1: FULL packs the app on both architectures at
+ the FAST run's version (additive; Part of #4104)
+
+full.yml gets app-pack (win-x64, win-arm64): publish and pack with Velopack, the publish folder for the self-test, the installer input
+(the commit under test and FULL's run id) and the CycloneDX SBOM, under the artifact names the release selector looks for, versioned
+0.1.<the FAST run's number> (workflow_run.run_number, or the new ci_run_number input on a run by hand), a release host exactly for main of this
+repository. Nothing here uses github.sha or github.run_number, which under workflow_run are the default branch's tip and FULL's own number.
+Additive: ci.yml's app job still packs and publishes. The app-pack-full catalog suite; full-gate needs the job. Tests first.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/full.yml                    | 102 +++++++++++++++++-
+ quality/catalog.yml                           |  13 +++
+ .../FullWorkflowTests.cs                      |  46 +++++++-
+ 3 files changed, 158 insertions(+), 3 deletions(-)
+
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index dcaca6ade..3f61e9c13 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -23,6 +23,10 @@ on:
+         description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a proof run, on a branch other than main only)
+         type: boolean
+         default: false
++      ci_run_number:
++        description: The CI run's number the packages are versioned by (0.1.<number>); needed by the app jobs on a run by hand
++        type: string
++        required: false
+ 
+ permissions:
+   contents: read
+@@ -416,11 +420,107 @@ jobs:
+           if-no-files-found: warn
+           retention-days: 7
+ 
++  app-pack:
++    # The Windows app's packages for the release train (docs/app-windows.md; S2, #4104, piece 6a): published with the host into one folder and packed with Velopack,
++    # once per architecture, at the FAST run's version, with the installer input and the SBOM the train verifies and attests. The same bytes ci.yml's app job packs
++    # today: 6a is additive, ci.yml still publishes until the cut-over. Unsigned: this job holds no signing identity. The self-test and the installer are the next jobs.
++    name: app-pack (${{ matrix.runtime }})
++    needs: trigger
++    if: needs.trigger.outputs.ok == 'true'
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - { runtime: win-x64, runner: windows-latest, out: out/app, artifact: agent-bridge-windows }
++          - { runtime: win-arm64, runner: windows-11-arm, out: out/app-arm64, artifact: agent-bridge-windows-arm64 }
++    runs-on: ${{ matrix.runner }}
++    env:
++      # The FAST run's number, never FULL's own run number (that counts from 1, below every release); the selector reads the version from these names.
++      APP_VERSION: 0.1.${{ github.event.workflow_run.run_number || inputs.ci_run_number }}
++      # A release build exactly when this commit may be published: main of this repository (github.ref is main for a workflow_run too; a proof branch is not).
++      APP_RELEASE: ${{ github.repository == 'danswett/agent-bridge' && github.ref == 'refs/heads/main' }}
++      # The commit under test: under workflow_run github.sha is the default branch's tip, not this.
++      SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          persist-credentials: false
++      - uses: ./.github/actions/arm64-foreground
++        if: matrix.runtime == 'win-arm64'
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - run: dotnet tool install -g vpk --version 1.2.161
++      - name: The version is the FAST run's number
++        shell: pwsh
++        run: |
++          if ($env:APP_VERSION -notmatch '^0\.1\.[1-9][0-9]*$') { Write-Error "APP_VERSION is '$env:APP_VERSION': a run by hand needs the CI run's number (the ci_run_number input)"; exit 1 }
++      - name: Publish and pack
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++        # -DeltaFrom: a delta from the latest release, so an installed copy downloads what changed. -ReleaseNotes: the commits since that release.
++        run: |
++          ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit $env:SHA -Out out/app/notes.md
++          ./build/pack-app.ps1 -Version $env:APP_VERSION -Runtime ${{ matrix.runtime }} -Out ${{ matrix.out }} -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
++      - name: The publish folder, for the self-test
++        # As published, before anything runs the app from it, so the self-test runs exactly the files packed here.
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: ${{ matrix.artifact }}-publish-${{ env.APP_VERSION }}
++          path: ${{ matrix.out }}/publish
++          include-hidden-files: true
++          if-no-files-found: error
++          retention-days: 1
++      - name: Only the publish path builds a release host
++        shell: pwsh
++        run: |
++          $packed = ./build/host-identity.ps1 ${{ matrix.out }}/publish/agent-bridge-host.dll
++          $wanted = if ($env:APP_RELEASE -eq 'true') { 'release' } else { 'dev' }
++          Write-Output "packed host: $packed build (APP_RELEASE=$env:APP_RELEASE)"
++          if ($packed -ne $wanted) { Write-Error "the packed host is a $packed build; this run wants a $wanted build"; exit 1 }
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
++          path: ${{ matrix.out }}/releases
++          if-no-files-found: error
++          retention-days: 30
++      - name: Record the installer input from this pack
++        shell: pwsh
++        run: |
++          . ./build/app-installer-input.ps1
++          Write-AppInstallerInput -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Out "$env:RUNNER_TEMP/installer-input" -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Commit $env:SHA -RunId '${{ github.run_id }}'
++      - name: The installer input's notices and identity
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: ${{ matrix.artifact }}-installer-input-${{ env.APP_VERSION }}
++          path: ${{ runner.temp }}/installer-input
++          include-hidden-files: true
++          if-no-files-found: error
++          retention-days: 7
++      - name: Install Trivy
++        uses: ./.github/actions/install-trivy
++      - name: SBOM of the published app (CycloneDX)
++        shell: pwsh
++        run: |
++          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/sbom" | Out-Null
++          trivy fs --format cyclonedx --output "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json" "${{ matrix.out }}/publish"
++          if ($LASTEXITCODE) { exit $LASTEXITCODE }
++          . ./build/app-notices.ps1
++          Add-AppSbomLicences -Publish '${{ matrix.out }}/publish' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Sbom "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json"
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}
++          path: ${{ runner.temp }}/sbom
++          if-no-files-found: error
++          retention-days: 30
++
+   full-gate:
+     # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
+     # job, runs whatever they did, and fails when any ended other than success, a skipped one included, so a FULL run whose lane
+     # did not run is no pass. It passes only when the FAST run was not a green push to main, and then says there was nothing to test.
+-    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui]
++    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui, app-pack]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 50903dd0f..965e2801d 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1193,6 +1193,19 @@ suites:
+     lane: full
+     status: exists
+ 
++  - id: app-pack-full
++    validation_plan: native
++    kind: packaging
++    ring: 2
++    select: always
++    # The release train's packages (S2, #4104, piece 6a): FULL publishes, packs (Velopack) and records the installer input and SBOM of the Windows app on both
++    # architectures at the FAST run's version, for the commit that run passed on. Additive: ci.yml's app job still packs and publishes until the cut-over (6b).
++    platforms: [win-x64, win-arm64]
++    runner: hosted
++    command: see full.yml app-pack
++    where: full.yml app-pack
++    lane: full
++    status: exists
+   # ---------------------------------------------------------------- live, on disposable machines
+   - id: lab-nightly
+     validation_plan: native
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+index d0304f7e1..0c47b0c70 100644
+--- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -28,7 +28,7 @@ public class FullWorkflowTests
+     [Fact]
+     public void Full_yml_has_the_trigger_job_the_spikes_pwa_e2e_and_the_gate_and_ci_yml_no_longer_has_them()
+     {
+-        Assert.Equal(["full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["app-pack", "full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+         Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
+     }
+ 
+@@ -141,7 +141,7 @@ public class FullWorkflowTests
+             .Single(s => s.Children.ContainsKey("if") && Scalar(s, "if").Contains("workflow_dispatch", StringComparison.Ordinal));
+         var script = Scalar(step, "run");
+ 
+-        Assert.Equal(["force-apt-fallback", "sha"], inputs.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["ci_run_number", "force-apt-fallback", "sha"], inputs.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+         Assert.Equal(["boolean", "false"], [Scalar(inputs["force-apt-fallback"], "type"), Scalar(inputs["force-apt-fallback"], "default")]);
+         foreach (var rule in new[] { "refs/heads/main", "main's head", "open pull request's head", "INPUT_SHA", "force-apt-fallback" })
+             Assert.Contains(rule, script, StringComparison.Ordinal);
+@@ -149,4 +149,46 @@ public class FullWorkflowTests
+         Assert.False(((YamlMappingNode)ci["on"]).Children.ContainsKey("workflow_dispatch"));
+         Assert.DoesNotContain("force-apt-fallback", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml")), StringComparison.Ordinal);
+     }
++
++    // The packages the release train publishes (S2, #4104, 6a): FULL packs both architectures at the FAST run's version, for the commit that run passed on.
++    static string AllText(YamlNode node) => node switch
++    {
++        YamlScalarNode s => s.Value ?? "",
++        YamlSequenceNode q => string.Join("\n", q.Children.Select(AllText)),
++        YamlMappingNode m => string.Join("\n", m.Children.Select(c => AllText(c.Key) + "\n" + AllText(c.Value))),
++        _ => "",
++    };
++
++    [Fact]
++    public void App_pack_packs_both_architectures_under_the_names_the_selector_looks_for()
++    {
++        var job = (YamlMappingNode)Jobs("full.yml")["app-pack"];
++        var include = ((YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)job["strategy"])["matrix"])["include"]).Children.ToList();
++        var names = ((YamlSequenceNode)job["steps"]).Children.OfType<YamlMappingNode>()
++            .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/upload-artifact@", StringComparison.Ordinal)).Select(s => Scalar(s["with"], "name")).ToList();
++
++        Assert.Equal(["app-pack (win-arm64)", "app-pack (win-x64)"], include.Select(l => $"app-pack ({Scalar(l, "runtime")})").Order(StringComparer.Ordinal));
++        Assert.Equal(["agent-bridge-windows", "agent-bridge-windows-arm64"], include.Select(l => Scalar(l, "artifact")).Order(StringComparer.Ordinal));
++        Assert.Equal(["${{ matrix.artifact }}-${{ env.APP_VERSION }}", "${{ matrix.artifact }}-installer-input-${{ env.APP_VERSION }}", "${{ matrix.artifact }}-publish-${{ env.APP_VERSION }}", "sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}"],
++            names.Order(StringComparer.Ordinal));
++    }
++
++    [Theory]
++    [InlineData("danswett/agent-bridge", "refs/heads/main", true)]
++    [InlineData("danswett/agent-bridge", "refs/heads/proof", false)]
++    [InlineData("evil/agent-bridge", "refs/heads/main", false)]
++    public void App_pack_is_versioned_by_the_FAST_run_and_a_release_build_only_for_main_of_this_repository(string repository, string reference, bool release)
++    {
++        var job = (YamlMappingNode)Jobs("full.yml")["app-pack"];
++        var env = (YamlMappingNode)job["env"];
++
++        var got = MergeRuleTests.IfExpression.Value(Expression(Scalar(env, "APP_RELEASE")), new Dictionary<string, string?> { ["github.repository"] = repository, ["github.ref"] = reference });
++
++        Assert.Equal("0.1.${{ github.event.workflow_run.run_number || inputs.ci_run_number }}", Scalar(env, "APP_VERSION"));
++        Assert.Equal(release, got is true);
++        // Under workflow_run github.sha is the default branch's tip and github.run_number is FULL's own: neither may reach the packages.
++        Assert.DoesNotContain("github.sha", AllText(job), StringComparison.Ordinal);
++        Assert.DoesNotContain("github.run_number", AllText(job), StringComparison.Ordinal);
++        Assert.Contains("-Commit $env:SHA -RunId '${{ github.run_id }}'", AllText(job), StringComparison.Ordinal);
++    }
+ }
+-- 
+2.56.1.windows.1
+
