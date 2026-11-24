@@ -61,7 +61,10 @@ less of what the app was handling than a full dump (a stack can still hold the v
 says so in `app.log` and re-arms the watchdog: the next freeze is dumped too, and a freeze that goes on is dumped once. Everything the watchdog does, the beats
 and the dump, runs on its own background thread: the UI thread only ever runs the no-op. A pause of more than 9 seconds between beats, and Windows' own resume
 notice (`ResumeNotifier`, a system callback with no window, so it works while the UI thread is blocked), discard the ping in flight and give the UI a full window
-again, and a debugger attached never dumps. A disk with less than 1 GB free gets no dump, and `app.log` says why. Dumps are `%LOCALAPPDATA%\AgentBridge\dumps\AgentBridge-hang-yyyyMMdd-HHmmss-<pid>.dmp`,
+again, and a debugger attached never dumps. A disk with less than 1 GB free gets no dump, and `app.log` says why. The log line also carries the UI's **last state**, as of
+the last ping it answered: the open popups, the focused element and whoever holds the pointer, by type and `x:Name` only (never text, content, titles or values; a name that is not
+a plain identifier is not shown). The ping reads it on the UI thread, the only one that may touch the XAML, and a reader that fails never stops the answer. A throwing logger never
+escapes a beat, and a dispatcher that refuses the ping (an app that is closing) stops the watchdog rather than count as a hang. Dumps are `%LOCALAPPDATA%\AgentBridge\dumps\AgentBridge-hang-yyyyMMdd-HHmmss-<pid>.dmp`,
 the newest three kept, and `app.log` names the path or says plainly that the dump was not written. A dump stays on the machine: nothing uploads it, and
 the watchdog never touches the host. `RecordHang` (the run marker's own hang evidence: a thread id and a redacted log tail) is not called by this
 slice; recovery UI and the existing feedback submission remain separate work.

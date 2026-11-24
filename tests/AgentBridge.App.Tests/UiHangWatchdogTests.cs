@@ -64,8 +64,8 @@ public sealed class UiHangWatchdogTests
     readonly FakeDump dump = new();
     readonly List<string> said = [];
 
-    UiHangWatchdog Watchdog(IHangDumpWriter? writer = null, Func<bool>? debugger = null) =>
-        new(ui, writer ?? dump, time, said.Add, debuggerAttached: debugger ?? (() => false));
+    UiHangWatchdog Watchdog(IHangDumpWriter? writer = null, Func<bool>? debugger = null, Func<string>? uiState = null) =>
+        new(ui, writer ?? dump, time, said.Add, debuggerAttached: debugger ?? (() => false), uiState: uiState);
 
     // Beats a hung UI for this long, one beat at a time.
     void Hang(UiHangWatchdog watchdog, TimeSpan total)
@@ -258,6 +258,70 @@ public sealed class UiHangWatchdogTests
 
         Assert.Equal(0, dump.Writes);
         Assert.True(watchdog.Stopped);
+    }
+
+    // The stuck-UI snapshot: what the UI looked like at its last answered ping, written to the log at the freeze. It is read on the UI thread, by the ping
+    // itself, because the watchdog thread cannot touch the XAML; it must never stop the ping being answered.
+    [Fact]
+    public void The_ui_state_is_read_by_the_ping_on_the_ui_thread_never_by_the_watchdog_thread()
+    {
+        var readOn = new List<int>();
+        var watchdog = Watchdog(uiState: () => { readOn.Add(Environment.CurrentManagedThreadId); return "S"; });
+
+        watchdog.Tick();
+        Assert.Empty(readOn);                        // posting the ping reads nothing
+
+        ui.Run();                                    // the UI thread runs it (here, this thread stands in for it)
+
+        Assert.Single(readOn);
+    }
+
+    [Fact]
+    public void A_freeze_logs_the_last_ui_state_with_how_long_before_it_was_seen()
+    {
+        var watchdog = Watchdog(uiState: () => "popups: 1 (Flyout 'MenuFlyout'); focus: TextBox 'SearchBox'; pointer capture: none");
+        watchdog.Tick();
+        ui.Run();                                    // answered: the state is recorded
+        time.Advance(Beat);
+
+        Hang(watchdog, TimeSpan.FromSeconds(40));
+
+        Assert.Equal(1, dump.Writes);
+        Assert.Contains(said, line => line.Contains("last UI state", StringComparison.Ordinal) && line.Contains("Flyout 'MenuFlyout'", StringComparison.Ordinal)
+            && line.Contains(" s before", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_ui_state_reader_that_throws_never_stops_the_ping_being_answered_and_is_said_unavailable()
+    {
+        var watchdog = Watchdog(uiState: () => throw new InvalidOperationException("the tree is gone"));
+        for (var i = 0; i < 10; i++) { watchdog.Tick(); ui.Run(); time.Advance(Beat); }   // still answered: no hang
+        Assert.Equal(0, dump.Writes);
+
+        Hang(watchdog, TimeSpan.FromSeconds(40));
+
+        Assert.Equal(1, dump.Writes);
+        Assert.Contains(said, line => line.Contains("last UI state", StringComparison.Ordinal) && line.Contains("unavailable", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_freeze_before_any_ping_was_ever_answered_says_no_state_was_recorded()
+    {
+        var watchdog = Watchdog(uiState: () => "S");
+
+        Hang(watchdog, TimeSpan.FromSeconds(40));
+
+        Assert.Contains(said, line => line.Contains("last UI state", StringComparison.Ordinal) && line.Contains("none was recorded", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Without_a_ui_state_reader_the_freeze_log_has_no_state_line()
+    {
+        var watchdog = Watchdog();
+
+        Hang(watchdog, TimeSpan.FromSeconds(40));
+
+        Assert.DoesNotContain(said, line => line.Contains("last UI state", StringComparison.Ordinal));
     }
 
     [Fact]

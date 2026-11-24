@@ -66,7 +66,8 @@ public partial class App : Application
         var ui = new QueueDispatcher(queue);
         if (options.SelfTest is null && !options.Demo)
         {
-            hangWatchdog = new UiHangWatchdog(ui, new WindowsMiniDump(Path.Combine(Paths.DataRoot, "dumps"), TimeProvider.System), TimeProvider.System, AppLog.Write);
+            hangWatchdog = new UiHangWatchdog(ui, new WindowsMiniDump(Path.Combine(Paths.DataRoot, "dumps"), TimeProvider.System), TimeProvider.System, AppLog.Write,
+                uiState: () => UiStateReader.Read(window?.Content?.XamlRoot));
             hangWatchdog.Start();
             resumeNotifier = new ResumeNotifier(hangWatchdog.NoteResume);  // a sleep is not a hang
         }

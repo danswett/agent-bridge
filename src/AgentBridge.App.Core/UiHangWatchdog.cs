@@ -41,10 +41,14 @@ public sealed class UiHangWatchdog : IDisposable
     // Three beats late (at least a second, over the timer's own granularity): the watchdog thread was paused, not the UI.
     TimeSpan PauseAfter => pingEvery * 3 > TimeSpan.FromSeconds(1) ? pingEvery * 3 : TimeSpan.FromSeconds(1);
     readonly Func<bool> debuggerAttached;
+    readonly Func<string>? uiState;
     readonly ManualResetEventSlim stop = new(false);
     Thread? thread;
 
     // Touched by the watchdog thread only (or by a test calling Tick); the UI thread's answer is the one volatile field.
+    sealed record StateAt(string Text, long Stamp);
+
+    StateAt? lastState;   // written by the UI thread's ping, read by this thread
     long answeredId;
     long pingId;
     long pingAt;
@@ -55,8 +59,9 @@ public sealed class UiHangWatchdog : IDisposable
     volatile bool resumed;
 
     public UiHangWatchdog(IUiDispatcher ui, IHangDumpWriter dump, TimeProvider time, Action<string> log, TimeSpan? pingEvery = null,
-        TimeSpan? hangAfter = null, Func<bool>? debuggerAttached = null)
+        TimeSpan? hangAfter = null, Func<bool>? debuggerAttached = null, Func<string>? uiState = null)
     {
+        this.uiState = uiState;
         (this.ui, this.dump, this.time, this.log) = (ui, dump, time, log);
         this.pingEvery = pingEvery ?? PingEvery;
         this.hangAfter = hangAfter ?? HangAfter;
@@ -109,7 +114,7 @@ public sealed class UiHangWatchdog : IDisposable
             // A queue that refuses the ping has shut down: an app that is closing, never a hung UI thread.
             try
             {
-                if (!ui.TryPost(() => Volatile.Write(ref answeredId, id)))
+                if (!ui.TryPost(() => Answer(id)))
                 {
                     closed = true;
                     Say("UI hang watchdog stopped: the UI dispatcher refused the ping (the app is closing)");
@@ -130,6 +135,7 @@ public sealed class UiHangWatchdog : IDisposable
             Say(path is null
                 ? $"UI hang: the UI thread has not answered for {Seconds(waited)}; the minidump was not written"
                 : $"UI hang: the UI thread has not answered for {Seconds(waited)}; minidump written to {path}");
+            SayLastState(now);
         }
         catch (HangDumpSkipped skipped)
         {
@@ -139,6 +145,28 @@ public sealed class UiHangWatchdog : IDisposable
         {
             Say($"UI hang: the UI thread has not answered for {Seconds(waited)}; the minidump was not written ({e.GetType().Name})");
         }
+    }
+
+    // Runs ON the UI thread, as the ping: it answers, and first records what the UI looks like (names only; the reader may throw and must not stop the answer).
+    void Answer(long id)
+    {
+        if (uiState is not null)
+        {
+            string text;
+            try { text = uiState(); }
+            catch (Exception) { text = "unavailable (the UI state could not be read)"; }
+            Volatile.Write(ref lastState, new StateAt(text, time.GetTimestamp()));
+        }
+        Volatile.Write(ref answeredId, id);
+    }
+
+    void SayLastState(long now)
+    {
+        if (uiState is null) { return; }
+        var state = Volatile.Read(ref lastState);
+        Say(state is null
+            ? "UI hang: the last UI state: none was recorded (no ping was ever answered)"
+            : $"UI hang: the last UI state, {Seconds(time.GetElapsedTime(state.Stamp, now))} before the freeze was seen: {state.Text}");
     }
 
     static string Seconds(TimeSpan span) => $"{(int)span.TotalSeconds} s";
