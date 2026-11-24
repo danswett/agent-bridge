@@ -3,8 +3,8 @@ using Xunit;
 
 namespace AgentBridge.App.Tests;
 
-// The suspected causes of the App.Tests test-host hang (fixes-main, Part of #4104). They stay in the suite and keep their
-// coverage, but run ALONE: xunit runs a collection defined with DisableParallelization after the parallel ones have finished,
+// What runs alone in App.Tests: the suspected cause of the test-host hang (fixes-main, Part of #4104), and the timing tests.
+// They stay in the suite and keep their coverage, but run ALONE: xunit runs a collection defined with DisableParallelization after the parallel ones have finished,
 // so a real MiniDumpWriteDump of this process (which suspends its threads, and Microsoft warns can deadlock) never happens
 // while other tests run. This removes a suspected cause; the root cause of the hang is not known to be it. RunCompletionTests ran
 // alone too, until it stopped setting a process-wide environment variable and compiling on the shared thread pool (#4104).
