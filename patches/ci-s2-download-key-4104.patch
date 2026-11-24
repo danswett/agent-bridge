@@ -1,0 +1,81 @@
+From 3b4ff71f40f7f5e26de26e640394d3b238f4684e Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 00:14:16 -0800
+Subject: [PATCH] CI S2: the archives cache key carries the signed indexes'
+ hash, so a moved index is a cache miss, never a failed verification (Part of
+ #4104)
+
+On main's logs every failing job restored an exact-key playwright-apt-v3-debs cache that FAILED verification against the signed indexes (the index had moved
+since the cache was written, and an exact key is immutable, so it failed on every run until someone deleted the key), then its quiet authenticated downloads ran
+past the job's limit. download.sh --cache-key (the scripts PR) now also outputs index-hash, a hash of the Date line of the release, -updates and -security
+InRelease files; this patch puts it in the key and in the restore prefix, so a moved index is a MISS (a fresh download, saved under a fresh key by ci.yml), and a
+prefix never restores an entry written under another index. The signed-index verification of a hit is unchanged. Safe in either order with the scripts PR: without
+index-hash the segment is empty and the key is as before.
+
+Test: the key and every restore prefix carry the index hash (proved red by dropping it from each).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../playwright-system-packages/action.yml     |  7 ++++---
+ .../FullWorkflowTests.cs                      | 20 +++++++++++++++++++
+ 2 files changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/.github/actions/playwright-system-packages/action.yml b/.github/actions/playwright-system-packages/action.yml
+index 244eee637..ea2798eb4 100644
+--- a/.github/actions/playwright-system-packages/action.yml
++++ b/.github/actions/playwright-system-packages/action.yml
+@@ -33,7 +33,8 @@ outputs:
+ runs:
+   using: composite
+   steps:
+-    # Cache archives only; apt authenticates fresh indexes on every run.
++    # Cache archives only; apt authenticates fresh indexes on every run. The key carries a hash of the signed indexes' dates (index-hash), so an index that moved is a
++    # cache MISS rather than an exact-key hit whose archives fail verification, and a restore prefix never matches an entry written under another index.
+     - id: ubuntu
+       shell: bash
+       run: echo "version=$(lsb_release -rs)-${ImageVersion:-noimage}" >> "$GITHUB_OUTPUT"
+@@ -49,9 +50,9 @@ runs:
+       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+       with:
+         path: ~/.cache/playwright-apt-debs
+-        key: playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.ref-hash }}
++        key: playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.index-hash }}-${{ steps.identity.outputs.ref-hash }}
+         restore-keys: |
+-          playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-
++          playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.index-hash }}-
+     - id: packages
+       shell: bash
+       working-directory: ${{ inputs.working-directory }}
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+index e86baecbd..cd37ee172 100644
+--- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -166,4 +166,24 @@ public class FullWorkflowTests
+         Assert.Equal(ci.Count(s => Uses(s, Restore)), saves.Count);
+         Assert.All(saves, s => Assert.Equal("always() && steps.system-packages.outputs.cache-ready == 'true'", Scalar(s, "if")));
+     }
++
++    /// <summary>
++    /// On main's logs every failing job restored an exact-key archives cache that failed verification against the signed indexes: the index had moved since the
++    /// cache was written, and an exact key is immutable, so it failed on every run. The key carries the index hash (download.sh --cache-key), and so does the restore
++    /// prefix, so a moved index is a miss and a prefix never restores an entry written under another index.
++    /// </summary>
++    [Fact]
++    public void The_archives_cache_key_carries_the_signed_indexes_hash_in_its_key_and_its_restore_prefix()
++    {
++        var debs = ((YamlSequenceNode)((YamlMappingNode)Load(".github/actions/playwright-system-packages/action.yml")["runs"])["steps"]).Children.OfType<YamlMappingNode>()
++            .Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "debs");
++        var with = (YamlMappingNode)debs["with"];
++        const string Packages = "${{ steps.identity.outputs.packages-hash }}", Index = "${{ steps.identity.outputs.index-hash }}", Ref = "${{ steps.identity.outputs.ref-hash }}";
++
++        Assert.Contains($"{Packages}-{Index}-{Ref}", Scalar(with, "key"), StringComparison.Ordinal);
++        var prefixes = Scalar(with, "restore-keys").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
++        Assert.NotEmpty(prefixes);
++        Assert.All(prefixes, p => Assert.EndsWith($"{Packages}-{Index}-", p, StringComparison.Ordinal));
++        Assert.Single(System.Text.RegularExpressions.Regex.Matches(Scalar(with, "key"), System.Text.RegularExpressions.Regex.Escape(Index)));
++    }
+ }
+\ No newline at end of file
+-- 
+2.56.1.windows.1
+
