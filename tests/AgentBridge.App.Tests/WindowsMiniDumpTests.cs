@@ -5,6 +5,10 @@ using Xunit;
 namespace AgentBridge.App.Tests;
 
 // The hang dump is MiniDumpNormal: thread stacks and modules, no heap. It is written for real here, from the test process itself.
+// MiniDumpWriteDump on its own process suspends its other threads, which Microsoft warns can deadlock, and this assembly's test host
+// hung on CI three times with this class in flight in one: so it runs ALONE, in a collection with no parallelism (xunit runs it after
+// the parallel ones have finished), and keeps its coverage. QuarantineTests lists it. That removes one suspected cause of the hang.
+[Collection(nameof(WindowsMiniDumpTests))]
 public sealed class WindowsMiniDumpTests : IDisposable
 {
     readonly string folder = Path.Combine(Path.GetTempPath(), "abdump-" + Guid.NewGuid().ToString("N"));
@@ -98,3 +102,6 @@ public sealed class ResumeNotifierTests
         Assert.False(notifier.Registered);
     }
 }
+
+[CollectionDefinition(nameof(WindowsMiniDumpTests), DisableParallelization = true)]
+public sealed class WindowsMiniDumpCollection;

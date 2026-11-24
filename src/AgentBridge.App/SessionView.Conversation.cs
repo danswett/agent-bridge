@@ -106,7 +106,7 @@ public sealed partial class SessionView
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
-            PinViewChanged(scroll);
+            PinViewChanged(scroll, final: !e.IsIntermediate);
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate)
             {
