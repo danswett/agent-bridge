@@ -94,6 +94,7 @@ public sealed partial class SettingsViewModel : Observable
     {
         this.host = host;
         ScriptCredentials = new ScriptCredentialsModel(host);
+        AddFolder = new AddFolderViewModel(host, () => PickFolder?.Invoke() ?? Task.FromResult<string?>(null));
         this.manager = manager;
         this.updater = updater;
         this.appAtSignIn = appAtSignIn;
@@ -132,6 +133,10 @@ public sealed partial class SettingsViewModel : Observable
 
     // Settings > Script credentials (see ScriptCredentialsModel); the page reads it, the host decides.
     public ScriptCredentialsModel ScriptCredentials { get; private set; } = null!;
+
+    // Settings > Folders Slipgates may start sessions in: Add folder (host.workspace.add). Only a window can open a folder picker, so the view gives it.
+    public AddFolderViewModel AddFolder { get; }
+    public Func<Task<string?>>? PickFolder { get; set; }
 
     public string HostState => host.State switch
     {

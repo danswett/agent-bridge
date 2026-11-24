@@ -72,6 +72,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.Capabilities.Add(HostOps.AgentVerificationCapability);
         host.Capabilities.Add(LaunchProtocol.Capability);
         host.Capabilities.Add(HostOps.AgentSignInCapability);
+        host.Capabilities.Add(HostOps.WorkspacesCapability);
         host.Start();
         connection = host.Connect(ui);
         // Start and stop timeouts on a clock that never moves, as in AutoUpdaterTests: they wait
@@ -99,6 +100,24 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     Task Connected() => Wait.UntilAsync(() => settings.HostRunning && connection.Status is not null, "the connection");
+
+    [Fact]
+    public async Task Add_folder_is_this_hosts_and_opens_the_picker_the_window_gave_but_sends_nothing_until_approved()
+    {
+        await Connected();
+        var picks = 0;
+        settings.PickFolder = () => { picks++; return Task.FromResult<string?>(@"C:\Projects\App"); };
+
+        Assert.True(settings.AddFolder.Available);
+        await settings.AddFolder.ChooseAsync();
+
+        Assert.Equal((1, AddFolderState.Confirming, @"C:\Projects\App"), (picks, settings.AddFolder.State, settings.AddFolder.PendingPath));
+        Assert.Empty(host.Sent(HostOps.WorkspaceAdd));
+        settings.PickFolder = null;
+        settings.AddFolder.Cancel();
+        await settings.AddFolder.ChooseAsync();
+        Assert.Equal(AddFolderState.Idle, settings.AddFolder.State);
+    }
 
     [Fact]
     public async Task The_reply_Return_choice_is_local_persisted_and_updates_existing_cards_at_once()

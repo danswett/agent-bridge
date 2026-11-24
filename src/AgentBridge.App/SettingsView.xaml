@@ -216,6 +216,14 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
     
+                <!-- Folders a session may be started in: approved here by the person (host.workspace.add), with the full path shown first. -->
+                <StackPanel x:Name="AddFolderGroup" Spacing="8" Visibility="Collapsed">
+                    <TextBlock Style="{StaticResource AbSectionTitle}" Text="Folders Slipgates may start sessions in" />
+                    <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" Text="A new session starts only in a folder you approve here. Agents started in it can read and change its files." />
+                    <Button x:Name="AddFolderButton" Content="Add folder..." Click="OnAddFolder" AutomationProperties.AutomationId="AddFolder" />
+                    <TextBlock x:Name="AddFolderStatus" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="AddFolderStatus" />
+                </StackPanel>
+
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Test an agent connection" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.VerificationStateText, Mode=OneWay}" AutomationProperties.AutomationId="VerificationState" />
                 <local:WrapRow Spacing="8">

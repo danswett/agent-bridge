@@ -24,9 +24,15 @@ public sealed partial class SettingsView : UserControl
         get => viewModel!;
         set
         {
-            if (viewModel is not null) { viewModel.UpdateStatusAnnounced -= AnnounceUpdate; viewModel.PropertyChanged -= OnViewModelChanged; }
+            if (viewModel is not null) { viewModel.UpdateStatusAnnounced -= AnnounceUpdate; viewModel.PropertyChanged -= OnViewModelChanged; viewModel.AddFolder.PropertyChanged -= OnAddFolderChanged; }
             viewModel = value;
-            if (viewModel is not null) { viewModel.UpdateStatusAnnounced += AnnounceUpdate; viewModel.PropertyChanged += OnViewModelChanged; }
+            if (viewModel is not null)
+            {
+                viewModel.UpdateStatusAnnounced += AnnounceUpdate;
+                viewModel.PropertyChanged += OnViewModelChanged;
+                viewModel.PickFolder = PickFolderAsync;
+                viewModel.AddFolder.PropertyChanged += OnAddFolderChanged;
+            }
             ScriptsSection.Attach(viewModel);
             Bindings.Update();
         }
@@ -34,6 +40,7 @@ public sealed partial class SettingsView : UserControl
 
     void OnViewModelChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        DispatcherQueue.TryEnqueue(RefreshAddFolder);
         if (e.PropertyName is "" or nameof(SettingsViewModel.AgentOffers)) { AnnounceOffers(); }
     }
 
@@ -44,6 +51,7 @@ public sealed partial class SettingsView : UserControl
     // The page came into view: the log is read then, not on every host event.
     public void Opened()
     {
+        RefreshAddFolder();
         viewModel?.RefreshLog();
         ScriptsSection.Opened();
         AnnounceOffers();
@@ -118,6 +126,64 @@ public sealed partial class SettingsView : UserControl
     {
         if (viewModel is { } v && sender is Button { Tag: string request }) { await v.CancelVerificationAsync(request); }
     }
+    // Add folder: shown only when the host can approve one; the button waits while a picker, a confirmation or a request is open.
+    void OnAddFolderChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => DispatcherQueue.TryEnqueue(RefreshAddFolder);
+
+    void RefreshAddFolder()
+    {
+        if (viewModel?.AddFolder is not { } add) { return; }
+        AddFolderGroup.Visibility = add.Available ? Visibility.Visible : Visibility.Collapsed;
+        AddFolderButton.IsEnabled = add.State is not (AddFolderState.Confirming or AddFolderState.Adding);
+        AddFolderStatus.Text = add.StatusText;
+    }
+
+    static async Task<string?> PickFolderAsync()
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FolderPicker();
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, MainWindow.CurrentHandle);
+            picker.FileTypeFilter.Add("*");
+            return (await picker.PickSingleFolderAsync())?.Path;
+        }
+        catch (Exception) { return null; } // a picker that cannot open is the same as one the person closed: nothing is offered
+    }
+
+    // The person sees the full path and what approving means before anything is sent; Cancel is the default. One confirmation at a time:
+    // a second click, or another dialog already open, never opens a second one, and the flow always ends back at Idle, Added or Refused.
+    bool addFolderOpen;
+
+    async void OnAddFolder(object sender, RoutedEventArgs e)
+    {
+        if (viewModel?.AddFolder is not { } add || XamlRoot is null || addFolderOpen) { return; }
+        addFolderOpen = true;
+        try
+        {
+            await add.ChooseAsync();
+            if (add.State != AddFolderState.Confirming) { return; }
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot, Title = "Approve this folder?",
+                Content = new ScrollViewer
+                {
+                    Content = new TextBlock { Text = add.ConfirmText, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true },
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = 320,
+                },
+                PrimaryButtonText = "Approve", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close,
+            };
+            AutomationProperties.SetName(dialog, "Person confirmation: approve a folder");
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await add.ApproveAsync(); }
+        }
+        catch (Exception) { AddFolderStatus.Text = AddFolderTexts.Generic; } // another dialog was open, or the window went away: nothing was sent
+        finally
+        {
+            add.Cancel(); // only does anything while still Confirming: Cancel, Escape, a failed dialog
+            addFolderOpen = false;
+            RefreshAddFolder();
+            AddFolderButton.Focus(FocusState.Programmatic);
+        }
+    }
+
     async void OnRunVerification(object sender, RoutedEventArgs e)
     {
         if (viewModel is not { CanRunVerification: true } v) { return; }

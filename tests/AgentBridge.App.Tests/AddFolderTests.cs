@@ -178,6 +178,19 @@ public sealed class AddFolderTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_connection_lost_while_the_confirmation_is_open_ends_the_flow_and_sends_nothing()
+    {
+        var add = Make();
+        await add.ChooseAsync();
+        await connection.DisposeAsync();
+
+        await add.ApproveAsync();
+
+        Assert.Equal((AddFolderState.Refused, AddFolderTexts.Unconfirmed, null), (add.State, add.StatusText, add.PendingPath));
+        Assert.Empty(host.Sent(HostOps.WorkspaceAdd));
+    }
+
+    [Fact]
     public async Task Approving_without_a_confirmation_or_twice_sends_one_request()
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

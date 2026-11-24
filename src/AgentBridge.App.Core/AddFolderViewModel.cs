@@ -81,7 +81,15 @@ public sealed class AddFolderViewModel(HostConnection host, Func<Task<string?>> 
 
     public async Task ApproveAsync()
     {
-        if (State != AddFolderState.Confirming || PendingPath is not { } path || sending || !Available) { return; }
+        if (State != AddFolderState.Confirming || PendingPath is not { } path || sending) { return; }
+        if (!Available)
+        {
+            // The host stopped offering it while the confirmation was open: end the flow rather than leave it waiting for ever.
+            PendingPath = null;
+            StatusText = AddFolderTexts.Generic;
+            State = AddFolderState.Refused;
+            return;
+        }
         sending = true;
         State = AddFolderState.Adding;
         var next = AddFolderState.Refused;
