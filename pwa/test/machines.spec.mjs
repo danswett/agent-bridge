@@ -1250,6 +1250,20 @@ test('a machine that leaves for a moment keeps its rows, offline, beside the oth
   await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(1);
 });
 
+// #4547: the count is the fleet roster's: live sessions only. Demo machines=2 is 3 sessions on Demo
+// machine's 4 and Laptop's 2 (laptop-copilot-1, laptop-ask-1).
+test('rows kept for a machine that left stay listed but are not counted as live, and count again once it is back', async ({ page }) => {
+  await openDemo(page, { machines: 2 });
+  await expect(page.locator('#session-count')).toHaveText('6 live on 2 machines');
+  await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', false));
+  await expect(card(page, LAPTOP, 'laptop-copilot-1')).toHaveAttribute('data-stale', 'offline');
+  await expect(page.locator('.session')).toHaveCount(6);
+  await expect(page.locator('#session-count')).toHaveText('4 live on 1 machine · 2 offline');
+  await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', true));
+  await expect(page.locator('.session[data-stale]')).toHaveCount(0);
+  await expect(page.locator('#session-count')).toHaveText('6 live on 2 machines');
+});
+
 test.describe('a machine back from offline', () => {
   test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
   const ASK = 'laptop-ask-1';
