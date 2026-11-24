@@ -1,0 +1,41 @@
+name: Stale PWA alarm
+
+# #4369 Fix 3 (Part of #4104). app.slipgates.com served a 12-day-old build (Nov 12 to 24) while every Pages run showed green, because a fail-closed rollback fence held the
+# deploys and nothing was loud about it. This is the check that notices: it reads the served config.js (APP_VERSION is the deployed commit, BUILT_AT its time) and main's
+# newest commit that changed pwa/, and the run goes RED when the served build is more than 24 hours older than that commit, or when either cannot be read (quality/stale-pwa.ps1
+# decides, offline and tested). Two read-only GETs, no secrets: the job's own read-only token lists commits, and config.js is a public file. A deliberate rollback alarms too.
+on:
+  schedule:
+    - cron: '23 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stale-pwa-alarm
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.repository == 'danswett/agent-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The default branch's own copy of the script (a schedule runs there); nothing of a pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: quality
+      - name: Read the served build and main's newest PWA change
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # A failed read leaves no file, and the script then fails closed (an unreadable site or history never reads as fresh).
+          curl --fail --silent --show-error --max-time 30 --retry 2 --output "$RUNNER_TEMP/config.js" https://app.slipgates.com/config.js || rm -f "$RUNNER_TEMP/config.js"
+          gh api "repos/$REPO/commits?sha=main&path=pwa&per_page=1" --jq 'if length == 0 then empty else .[0] | {sha: .sha, date: .commit.committer.date} end' > "$RUNNER_TEMP/newest.json" || rm -f "$RUNNER_TEMP/newest.json"
+      - name: Is the served build more than 24 hours behind main's newest PWA change?
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/stale-pwa.ps1 -ConfigPath "$env:RUNNER_TEMP/config.js" -NewestPath "$env:RUNNER_TEMP/newest.json"

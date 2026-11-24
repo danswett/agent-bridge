@@ -45,6 +45,10 @@
 #   tier_jobs     required with tier: post-merge: the exact ci.yml job display names it makes
 #                 post-merge ("pwa-ui (webkit 1/3)"), each a job its where names. Any post-merge
 #                 suite naming a job makes it post-merge; a renamed job blocks again
+#   lane          fast (the default) | full (S2, #4104, quality/README.md §4.7). A fast suite's where names
+#                 ci.yml jobs, the merge gate; a full suite's where names full.yml jobs, the FULL lane that
+#                 never gates a merge. check reports an unknown lane (it counts as fast), a full suite whose
+#                 where names ci.yml or no full.yml job, and a fast suite whose where names full.yml
 #
 # A suite with select: affected needs project, builds or triggers, or nothing can select it.
 #
@@ -352,7 +356,7 @@ suites:
     runner: local
     project: tests/AgentBridge.Quality.Tests
     triggers: [src/**, tools/**, build/**, mcp/**, pwa/**, ops/**, infra/**, apple/**, .config/**, '*', tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json, tests/AgentBridge.Quality.Tests/HaCallSiteGuardTests.cs]
-    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~HaCallSiteGuardTests
+    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter "FullyQualifiedName~HaCallSiteGuardTests"
     where: ci.yml product
     baseline: { tests: 51, seconds: 3 }
     status: exists
@@ -451,7 +455,10 @@ suites:
     # The merge rule GitHub enforces (quality/README.md §4.9): main's copy of merge-rule.yml judges
     # every open pull request into main against main's quality/merge-rule.yml and posts the
     # merge-rule status main's ruleset requires. Never a pull request's own run, so it can't loosen
-    # its own gate. Its logic is quality-tool's MergeRule.cs, tested there.
+    # its own gate. Its logic is quality-tool's MergeRule.cs, tested there. Its triggers (#4104):
+    # every open-PR workflow's start and finish, CI's push run on main finishing only, statuses on any
+    # failure, error or pending and on success only for the contexts read by name; one run per key
+    # (MergeRuleTests: the event table, the status table, the cancel proof).
     platforms: [linux-x64]
     runner: hosted
     command: see merge-rule.yml (a dry run of the same verdict, posting nothing - dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N)
@@ -534,9 +541,9 @@ suites:
     # Both Windows runners run these steps, so a build/ change reaches windows-11-arm too.
     platforms: [win-x64, win-arm64]
     runner: hosted
-    triggers: [build/**]
+    triggers: [build/**, .github/workflows/publish-pending.yml]
     command: pwsh build/test-shadow-week.ps1; pwsh build/test-publish-prerelease.ps1
-    where: ci.yml product
+    where: ci.yml product; publish-pending.yml
     status: exists
 
   - id: lab-scripts
@@ -623,6 +630,19 @@ suites:
     # Flip to exists with that patch.
     status: planned
 
+  - id: stale-pwa-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The stale-PWA alarm's decision (#4369 Fix 3, #4104): app.slipgates.com's served build (config.js APP_VERSION and BUILT_AT) against main's newest PWA-changing
+    # commit; more than 24 h behind fails loudly, and anything unreadable fails closed. On files, offline: no request, no token.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/stale-pwa.ps1, quality/test-stale-pwa.ps1]
+    command: pwsh -NoProfile -File quality/test-stale-pwa.ps1
+    where: ci.yml light, stale-pwa.yml check
+    status: exists
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
@@ -1201,8 +1221,25 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: hosted
     triggers: [spikes/**]
-    command: see ci.yml spikes, spikes-linux
-    where: ci.yml spikes, spikes-linux
+    # The FULL lane since S2 piece 4 (#4104): a change under spikes/ no longer waits on these in a pull request; they run in
+    # full.yml after the merge, and a red one opens a full-red issue (piece 7) and never holds a merge.
+    command: see full.yml spikes, spikes-linux
+    where: full.yml spikes, spikes-linux
+    lane: full
+    status: exists
+
+  - id: full-gate
+    validation_plan: native
+    kind: static
+    ring: 2
+    select: always
+    # The FULL lane's own plumbing (full.yml, S2, #4104): the trigger job that says whether the FAST run was a green push to main,
+    # and full-gate, which fails when any FULL job did not pass (a skipped one included), as quality-gate does for ci.yml.
+    platforms: [linux-x64]
+    runner: hosted
+    command: see full.yml trigger, full-gate
+    where: full.yml trigger, full-gate
+    lane: full
     status: exists
 
   # ---------------------------------------------------------------- live, on disposable machines

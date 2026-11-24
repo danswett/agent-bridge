@@ -21,6 +21,7 @@ sealed record AppOptions
     public string? SelfTest { get; init; }
     public bool HistoryScrollBudget { get; init; }
     public bool HistoryScrollPreserve { get; init; }
+    public bool WheelNotch { get; init; }
     public bool LiveListReplay { get; init; }
     // --self-test-shard i/n (#1755): which stages of the self-test run; the whole run without it. A bad one is kept to be refused.
     public SelfTestShard SelfTestShard { get; init; } = SelfTestShard.Whole;
@@ -40,6 +41,7 @@ sealed record AppOptions
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;
                 case "--self-test-history-scroll" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollBudget = true }; break;
                 case "--self-test-scroll-preserve" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollPreserve = true }; break;
+                case "--self-test-wheel-notch" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, WheelNotch = true }; break;
                 case "--self-test-shard" when i + 1 < args.Length:
                     o = SelfTestShard.TryParse(args[++i], out var shard) ? o with { SelfTestShard = shard } : o with { BadSelfTestShard = args[i] };
                     break;

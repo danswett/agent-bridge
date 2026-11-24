@@ -85,6 +85,59 @@ public sealed class WorkspaceApprovalTests : IDisposable
     }
 
     [Fact]
+    public void A_network_share_is_not_a_local_folder_and_is_refused_before_it_is_touched()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+
+        foreach (var share in new[] { @"\\server\share\work", @"\\localhost\C$\Users", @"\\127.0.0.1\share" })
+        {
+            Assert.Equal(WorkspaceApproval.NotLocal, Add(share).Code);
+        }
+        Assert.False(File.Exists(ConfigPath));
+    }
+
+    [Fact]
+    public void Only_a_local_fixed_drive_is_taken()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+
+        Assert.True(WorkspaceApproval.IsLocalFixed(Dir("here")));
+        Assert.False(WorkspaceApproval.IsLocalFixed(@"\\server\share"));
+        var unused = Enumerable.Range('D', 23).Select(i => (char)i).First(c => !DriveInfo.GetDrives().Any(d => d.Name[0] == c));
+        Assert.False(WorkspaceApproval.IsLocalFixed(unused + @":\none"));
+    }
+
+    [Fact]
+    public void While_the_config_file_is_being_changed_elsewhere_the_answer_is_busy_after_the_wait_and_nothing_is_written()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1 }""");
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var holder = new Thread(() =>
+        {
+            using var mutex = new Mutex(false, WorkspaceApproval.GateName(folder));
+            mutex.WaitOne();
+            held.Set();
+            release.Wait();
+            mutex.ReleaseMutex();
+        });
+        holder.Start();
+        held.Wait();
+        try
+        {
+            var started = Environment.TickCount64;
+
+            var result = WorkspaceApproval.Add(folder, Dir("a"), null, false, _ => false, TimeSpan.FromMilliseconds(200));
+
+            Assert.Equal(WorkspaceApproval.Busy, result.Code);
+            Assert.InRange(Environment.TickCount64 - started, 150, 5000);
+            Assert.Equal("""{ "version": 1 }""", File.ReadAllText(ConfigPath));
+        }
+        finally { release.Set(); holder.Join(); }
+        Assert.Equal(WorkspaceApproval.Added, Add(Dir("b")).Code);
+    }
+
+    [Fact]
     public async Task Approvals_made_at_the_same_time_are_all_kept()
     {
         var dirs = Enumerable.Range(0, 8).Select(i => Dir("p" + i)).ToArray();

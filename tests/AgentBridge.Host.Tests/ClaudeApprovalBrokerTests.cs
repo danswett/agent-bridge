@@ -30,6 +30,31 @@ public sealed class ClaudeApprovalBrokerTests
     }
 
     [Fact]
+    public void A_flood_of_prompts_is_refused_past_the_per_session_and_total_caps_and_a_freed_slot_is_reusable()
+    {
+        for (var n = 0; n < ClaudeApprovalBroker.MaxPerSession; n++) { Assert.NotNull(broker.Register("s-1", "r-" + n, Hello)); }
+        Assert.Null(broker.Register("s-1", "r-x", Hello));
+        Assert.NotNull(broker.Register("s-2", "r-0", Hello));
+        broker.Withdraw("s-1");
+        Assert.NotNull(broker.Register("s-1", "r-x", Hello));
+        for (var n = 0; n < ClaudeApprovalBroker.MaxTotal; n++) { _ = broker.Register("t-" + n / 2, "r-" + n, Hello); }
+        Assert.Null(broker.Register("u-1", "r-0", Hello));
+        time.Advance(TimeSpan.FromSeconds(101));
+        Assert.NotNull(broker.Register("u-1", "r-0", Hello));
+    }
+
+    [Fact]
+    public void Text_that_is_not_well_formed_is_refused_and_a_long_command_is_not_hashed_yet_stays_unanswerable()
+    {
+        var lone = "a" + (char)0xD800 + "b";
+        Assert.Throws<ArgumentException>(() => ClaudeApprovalBroker.Digest(lone));
+        Assert.Throws<ArgumentException>(() => { _ = broker.Register("s-1", "r-1", lone); });
+        Assert.NotEqual(ClaudeApprovalBroker.Digest("a" + (char)0xFFFD + "b"), ClaudeApprovalBroker.Digest("ab"));
+        _ = broker.Register("s-1", "r-2", new string('x', ClaudeApprovalBroker.PreviewMax + 1));
+        Assert.Equal(ClaudeApprovalBroker.Result.Truncated, broker.Resolve(Person, "s-1", "r-2", "anything", "allow"));
+    }
+
+    [Fact]
     public async Task An_answer_is_used_once_so_it_cannot_settle_the_next_identical_prompt()
     {
         var first = broker.Register("s-1", "r-1", Hello)!;

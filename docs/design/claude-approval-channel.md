@@ -13,11 +13,11 @@ decision is an authenticated device's signed answer.
 
 ## PR A (this change): `ClaudeApprovalBroker`, host side, in memory
 
-`Register(session, request, command)` returns an awaitable verdict (`allow`, `deny`, or none). `Resolve(principal, session, request, verdict)`:
+`Register(session, request, command)` returns an awaitable verdict (`allow`, `deny`, or none), or null when refused. `Resolve(principal, session, request, shown, verdict)`, where `shown` is the digest, trusts its caller for the principal and uses the wall clock for the deadline:
 - accepts only **`person:` plus a 32-hex device id**, the relay form; `person:local` (this machine's pipe), any agent, and anything malformed is
   refused as `Principal` and the prompt keeps waiting;
-- is **one-shot**: the answer is used up, so it cannot settle the next identical prompt; the same prompt registered again ends the earlier wait with no
-  verdict;
+- is **one-shot**: the answer is used up, so it cannot settle the next identical prompt; the same prompt registered again while the first is live is refused (null) and
+  the first keeps waiting: a wait ends only by an answer, `Withdraw` or the deadline;
 - gives **no verdict after the deadline** (100 s, below the hook's timeout) and a late answer is `Unknown`;
 - refuses a command longer than the 300-character preview as `Truncated` (the person would see a prefix of what they approve);
 - is **bound to the command shown** (#958): the answer carries the digest (lower-case SHA-256 hex) of the exact text the person was shown, and an answer
@@ -27,6 +27,8 @@ decision is an authenticated device's signed answer.
   exactly what the person sees, and the 300-character rule applies to that text;
 - checks the deadline itself when an answer arrives, so a delayed timer callback cannot let a late answer through; a wait that is not finite and positive
   is refused when the broker is built;
+- holds at most 4 prompts per session and 256 in all (each up to the wait); a further `Register` is refused (null). A command over the preview is never hashed, and text
+  that is not well-formed (a lone surrogate) is refused with `ArgumentException`, never turned into U+FFFD, so two texts cannot share a digest;
 - refuses a verdict other than exactly `allow` or `deny`; `Withdraw(session)` ends a session's waits with no verdict.
 
 **Not in this PR:** no pipe op, no hook change, no registration, no tracker listing, no app or push; **nothing constructs the broker** (a test pins

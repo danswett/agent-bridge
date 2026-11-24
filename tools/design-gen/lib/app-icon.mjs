@@ -4,6 +4,7 @@
 // client ships: the Windows app's .ico and toast logo, and the PWA's manifest and touch icons.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { loadTokens } from './tokens.mjs';
 import { readDesignSvg, parts, fmt } from './svg.mjs';
@@ -144,11 +145,39 @@ export function sceneSvg({ grid, shapes }) {
 // Colours an option may name rather than spell: the template black is Apple's convention.
 const NAMED = { monochrome: (spec) => spec.colours.monochrome, template: () => '#000000' };
 
-export function rasterize(spec, name, size, options = {}) {
+function draw(spec, name, size, options) {
   const markColour = NAMED[options.markColour]?.(spec) ?? options.markColour;
   const s = scene(spec, name, { ...options, ...(markColour ? { markColour } : {}) });
   return render({ grid: s.grid, shapes: s.shapes.map((x) => ({ ...x, fill: x.fill && rgb(x.fill), stroke: x.stroke && rgb(x.stroke) })) }, size);
 }
+
+// What was drawn in this process, so that comparing an icon against its file, which draws it, and writing it, which draws it again, cost one drawing and not one each (#4104: staleAppIcons
+// was about 9 s a call and a test file called it about 25 times). A drawing is a pure function of the spec's content and the target, so the key is a hash of the spec as the files gave it plus the
+// target: a changed token or mark is another key and is drawn again. In memory only, never written anywhere, so it cannot go stale and does not cross processes; the files compared against it are read
+// every time. Only the three newest specs are kept, since each holds every icon it drew (megabytes). The images are read, never changed, by their callers.
+const drawn = new Map();
+const KEPT_SPECS = 3;
+const specKeys = new WeakMap();
+function specKey(spec) {
+  let key = specKeys.get(spec);
+  if (!key) { key = createHash('sha256').update(JSON.stringify(spec)).digest('hex'); specKeys.set(spec, key); }
+  return key;
+}
+
+export function rasterize(spec, name, size, options = {}) {
+  const key = specKey(spec);
+  let images = drawn.get(key);
+  if (images) { drawn.delete(key); } else { images = new Map(); }
+  drawn.set(key, images);
+  for (const old of [...drawn.keys()].slice(0, Math.max(0, drawn.size - KEPT_SPECS))) { drawn.delete(old); }
+  const target = `${name}|${size}|${JSON.stringify(options)}`;
+  let image = images.get(target);
+  if (!image) { image = draw(spec, name, size, options); images.set(target, image); }
+  return image;
+}
+
+// How many icons this process holds drawn, for the test that the memo stays in it.
+export const rasterMemoSize = () => [...drawn.values()].reduce((n, images) => n + images.size, 0);
 
 // The Windows tile at a size: a native cut drawn pixel for pixel at 24 px and under, where the
 // full mark's strokes would fall between pixels.

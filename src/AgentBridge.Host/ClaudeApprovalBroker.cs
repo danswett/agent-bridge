@@ -10,10 +10,14 @@ namespace AgentBridge.Host;
 // prompt keeps waiting. An answer is used once; it carries the DIGEST of the command the person was shown and is refused for any other (#958); a live
 // prompt is never replaced by a second registration; there is no verdict after the deadline (checked here, not left to the timer); and a command that
 // would be shown cut (over PreviewMax) is never answerable. The text passed in is the exact text SHOWN, after any escaping: the broker does no escaping.
+// Resolve trusts its CALLER for the principal (the sessions.answer path must pass only the authenticated one) and uses the wall clock (TimeProvider) for the deadline.
 // Nothing constructs this yet: no pipe op, no hook, no registration, and the setting stays off.
 internal sealed partial class ClaudeApprovalBroker
 {
     public const int PreviewMax = 300;
+    // What may be held at once (each for up to the wait): a flood of distinct prompts is refused, not held.
+    public const int MaxPerSession = 4;
+    public const int MaxTotal = 256;
     public enum Result { Accepted, Principal, Unknown, Shown, Truncated, Verdict }
 
     sealed class Pending
@@ -29,7 +33,13 @@ internal sealed partial class ClaudeApprovalBroker
     private static partial Regex RelayPerson();
 
     // The digest an answer must carry: lower-case SHA-256 hex of the exact text the person was shown.
-    public static string Digest(string shown) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(shown))).ToLowerInvariant();
+    // Text that is not well-formed UTF-16 (a lone surrogate) is refused, never silently changed to U+FFFD, so two different texts cannot share a digest.
+    static readonly UTF8Encoding Strict = new(false, true);
+    public static string Digest(string shown)
+    {
+        try { return Convert.ToHexString(SHA256.HashData(Strict.GetBytes(shown))).ToLowerInvariant(); }
+        catch (EncoderFallbackException) { throw new ArgumentException("the text is not well-formed", nameof(shown)); }
+    }
 
     readonly TimeProvider time;
     readonly TimeSpan wait;
@@ -44,7 +54,8 @@ internal sealed partial class ClaudeApprovalBroker
     }
 
     // The verdict ("allow" or "deny"), or null with no answer by the deadline or when the prompt was withdrawn. Null itself (not a task) when a prompt for
-    // this session and request is already waiting: it is never replaced, so the command the person is looking at cannot be swapped under them.
+    // this session and request is already waiting (never replaced, so the command the person is looking at cannot be swapped under them) or too many are held.
+    // A command over PreviewMax is never hashed (it can never be answered). Throws ArgumentException for text that is not well-formed.
     public Task<string?>? Register(string session, string request, string command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -52,12 +63,13 @@ internal sealed partial class ClaudeApprovalBroker
         var entry = new Pending
         {
             Verdict = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously),
-            Answerable = command.Length <= PreviewMax, Shown = Digest(command), Deadline = time.GetUtcNow() + wait,
+            Answerable = command.Length <= PreviewMax, Shown = command.Length <= PreviewMax ? Digest(command) : "", Deadline = time.GetUtcNow() + wait,
         };
         lock (gate)
         {
             if (pending.TryGetValue(key, out var live) && time.GetUtcNow() < live.Deadline) { return null; }
             if (pending.Remove(key, out var expired)) { End(expired, null); }
+            if (pending.Count >= MaxTotal || pending.Keys.Count(k => k.Session == session) >= MaxPerSession) { return null; }
             entry.Timer = time.CreateTimer(_ => { lock (gate) { if (pending.TryGetValue(key, out var held) && held == entry) { pending.Remove(key); } } End(entry, null); },
                 null, wait, Timeout.InfiniteTimeSpan);
             pending[key] = entry;
@@ -73,8 +85,8 @@ internal sealed partial class ClaudeApprovalBroker
         {
             if (!pending.TryGetValue((session, request), out var entry)) { return Result.Unknown; }
             if (time.GetUtcNow() >= entry.Deadline) { pending.Remove((session, request)); End(entry, null); return Result.Unknown; }
-            if (!string.Equals(shown, entry.Shown, StringComparison.Ordinal)) { return Result.Shown; }
             if (!entry.Answerable) { return Result.Truncated; }
+            if (!string.Equals(shown, entry.Shown, StringComparison.Ordinal)) { return Result.Shown; }
             if (verdict is not ("allow" or "deny")) { return Result.Verdict; }
             pending.Remove((session, request));
             End(entry, verdict);
