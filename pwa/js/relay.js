@@ -9,7 +9,8 @@ import { concat, utf8 } from './bytes.js';
 
 export const DATA = 1;
 export const ID_BYTES = 16;
-export const CLOSE_CODES = Object.freeze({ authFailed: 4001, proofFailed: 4003, replaced: 4009 });
+// removed: the account's roster (enforce mode) holds a removal of this device's key (#55 D2). tooManyDevices: the account is at its device limit, pending ones included.
+export const CLOSE_CODES = Object.freeze({ authFailed: 4001, proofFailed: 4003, replaced: 4009, tooManyDevices: 4029, removed: 4030 });
 
 const OPEN = 1;
 // A probe's payload: no channel kind (channels.js KIND starts at 1).
@@ -21,6 +22,9 @@ export class Relay {
   // Blob and feedback requests waiting for their result, by id.
   #storageRequests = new Map();
   #nextStorage = 0;
+  // roster-get requests waiting for their roster reply, by id.
+  #rosters = new Map();
+  #nextRoster = 0;
   // Forget requests waiting for their forget-result, by id.
   #forgets = new Map();
   #nextForget = 0;
@@ -67,6 +71,9 @@ export class Relay {
         this.#storageRequests.clear();
         for (const [, p] of this.#forgets) { p.reject(new Error('the relay connection ended')); }
         this.#forgets.clear();
+        // A roster request answers no more once the socket is gone; settling it also clears its timer.
+        for (const settle of [...this.#rosters.values()]) { settle(null); }
+        this.#rosters.clear();
         for (const settle of [...this.#probes]) { settle(false); }
         if (!ready) { reject(Object.assign(new Error(`the relay closed the connection (${e.code}${e.reason ? ` ${e.reason}` : ''})`), info)); }
         else { this.onClose?.(info); }
@@ -105,7 +112,14 @@ export class Relay {
         this.feedbackMaxBytes = m.feedback && Number.isSafeInteger(m.feedback.max) && m.feedback.max > 0 ? m.feedback.max : 0;
         ready();
       } else if (m.t === 'presence') {
-        this.onPresence?.(Array.isArray(m.devices) ? m.devices : [], Array.isArray(m.known) ? m.known : null);
+        // pending: the relay holds this device as not yet approved (enforce mode): it is told nothing else of the account.
+        this.onPresence?.(Array.isArray(m.devices) ? m.devices : [], Array.isArray(m.known) ? m.known : null, m.pending === true);
+      } else if (m.t === 'roster') {
+        const p = this.#rosters.get(m.id);
+        if (p) {
+          this.#rosters.delete(m.id);
+          p({ mode: typeof m.mode === 'string' ? m.mode : null });
+        }
       } else if (m.t === 'forget-result') {
         const p = this.#forgets.get(m.id);
         if (p) {
@@ -179,6 +193,18 @@ export class Relay {
       const timer = setTimeout(() => { if (this.#storageRequests.delete(id)) { reject(new Error(`the relay did not answer the ${kind} request`)); } }, timeoutMs);
       this.#storageRequests.set(id, { result, resolve: (r) => { clearTimeout(timer); resolve(r); }, reject: (e) => { clearTimeout(timer); reject(e); } });
       this.#ws.send(JSON.stringify({ ...message, id }));
+    });
+  }
+
+  // The account's roster mode as the relay says it ({ mode }), asked once and never waited on by anything else: a pending device's request
+  // is ignored by the relay, so no answer within timeoutMs is null, not an error. Only the mode is read; the entries are the verifier's.
+  rosterGet(timeoutMs = 10000) {
+    if (!this.open) { return Promise.resolve(null); }
+    const id = ++this.#nextRoster;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { if (this.#rosters.delete(id)) { resolve(null); } }, timeoutMs);
+      this.#rosters.set(id, (answer) => { clearTimeout(timer); resolve(answer); });
+      this.#ws.send(JSON.stringify({ t: 'roster-get', id }));
     });
   }
 

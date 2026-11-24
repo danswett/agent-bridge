@@ -20,6 +20,7 @@ import { CLOSE_CODES, Relay } from './relay.js';
 import { ChannelSet } from './channels.js';
 import { ReconnectBackoff } from './backoff.js';
 import { AppTimings } from './app-timings.js';
+import { EnrollmentTexts } from './device-approval.js';
 
 // Long enough that switching to another app and back, to copy something, say, keeps everything
 // as it was; short enough that a phone put away stops talking within seconds.
@@ -73,6 +74,10 @@ export class BridgeConnection {
   presence = [];
   // The account's machines that are offline (relay.js); null while the relay keeps no roster.
   known = null;
+  // The account's roster mode as the relay said it ('observe' or 'enforce'), null until it has, after a lost connection, or for anything else:
+  // device approval (device-approval.js) is shut while it is null. pending: the relay holds this device as not yet approved.
+  rosterMode = null;
+  pending = false;
   // 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'resting' | 'replaced' | 'signed-out' | 'stopped'
   // replaced: stopped for good because another window keeps taking the connection, until Use here.
   state = 'idle';
@@ -145,6 +150,8 @@ export class BridgeConnection {
   }
 
   stop() {
+    this.pending = false;
+    this.#setRosterMode(null);
     clearTimeout(this.#retryTimer);
     if (this.#wake) {
       this.win.document?.removeEventListener?.('visibilitychange', this.#wake);
@@ -220,6 +227,21 @@ export class BridgeConnection {
     return this.relay.forget(machineId);
   }
 
+  // Asked once after ready and never waited on: connecting, and a join screen, need nothing from it. An answer after the connection was lost is ignored.
+  #askRosterMode(r) {
+    let asked;
+    try { asked = Promise.resolve(r.rosterGet?.()); } catch { return; }
+    // No answer is not a mode: a pending device's request goes unanswered, and it was already told enforce by its presence.
+    asked.then((answer) => { if (this.relay === r && answer?.mode != null) { this.#setRosterMode(answer.mode); } }, () => {});
+  }
+
+  #setRosterMode(mode) {
+    const next = mode === 'observe' || mode === 'enforce' ? mode : null;
+    if (next === this.rosterMode) { return; }
+    this.rosterMode = next;
+    this.#emit('roster-mode', next);
+  }
+
   #connect() {
     if (['signed-out', 'replaced', 'stopped', 'resting'].includes(this.state)) { return Promise.resolve(); }
     if (this.#attempt) { return this.#attempt; }
@@ -228,11 +250,15 @@ export class BridgeConnection {
     if (this.state !== 'reconnecting') { this.#setState('connecting'); }
     const r = this.makeRelay({ base: this.base, key: this.key, deviceId: this.deviceId, name: this.name, kind: 'pwa' });
     r.onLog = (line) => this.#emit('log', line);
-    r.onPresence = (list, known) => {
+    r.onPresence = (list, known, pending = false) => {
       // Presence can arrive before 'ready' (S5 finding 2), while this.relay is still null.
-      if (this.relay && this.relay !== r) { return; }
+      // A socket that is already gone says nothing (relay is null between a drop and the next ready).
+      if (this.relay !== r && this.#connecting !== r) { return; }
       this.presence = list;
       this.known = known;
+      this.pending = pending === true;
+      // The relay tells only an enforce-mode account's unapproved device that it is pending.
+      if (this.pending) { this.#setRosterMode('enforce'); }
       this.#emit('presence', list);
     };
     r.onClose = (e) => this.#dropped(r, e);
@@ -247,6 +273,7 @@ export class BridgeConnection {
       this.channels.attach(r);
       this.#setState('connected', r.login ?? '');
       this.#emit('ready', r);
+      this.#askRosterMode(r);
     }, (e) => {
       if (this.#connecting !== r) { return; }
       this.#connecting = null;
@@ -285,6 +312,9 @@ export class BridgeConnection {
 
   #dropped(r, e, { now = false } = {}) {
     if (r && this.relay !== r) { return; }
+    // Whatever the relay said on a connection that is over, or that never got as far as ready, is not true of the next one.
+    this.pending = false;
+    this.#setRosterMode(null);
     if (r) {
       this.#unwatch();
       // So that the next stall is on record (#1128): why it went, and how long it had been quiet.
@@ -300,6 +330,13 @@ export class BridgeConnection {
       this.#emit('signed-out', e);
       return;
     }
+    if (e.code === CLOSE_CODES.removed) {
+      // The roster holds a removal of this device's key: the device signs out and in again, as the fixed words say. Nothing the relay sent is shown.
+      this.#setState('signed-out', EnrollmentTexts.forRefusal('removed'));
+      this.#emit('removed', e);
+      this.#emit('signed-out', e);
+      return;
+    }
     if (e.code === CLOSE_CODES.replaced) {
       this.#replaced();
       return;
@@ -307,7 +344,8 @@ export class BridgeConnection {
     // Given up for silence: the network is likely there by another route, so no waiting.
     const delay = now ? 0 : this.#backoff.next(e.code, e.reason);
     this.retryAt = Date.now() + delay;
-    this.#setState('reconnecting', `${e.code ?? ''} ${e.reason ?? ''}`.trim());
+    // The relay's own words are not shown for the account being full.
+    this.#setState('reconnecting', e.code === CLOSE_CODES.tooManyDevices ? EnrollmentTexts.TOO_MANY_DEVICES : `${e.code ?? ''} ${e.reason ?? ''}`.trim());
     this.#retryTimer = setTimeout(() => this.#connect(), delay);
   }
 

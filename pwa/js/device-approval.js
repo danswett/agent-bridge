@@ -6,6 +6,13 @@
 // exists and nothing behind it is built.
 export const rosterModeVisible = (mode) => mode === 'observe' || mode === 'enforce';
 
+// The mode source over a connection (connection.js): its roster mode, which is null until the relay has said one, so the gate is shut.
+export const rosterModeSource = (connection) => ({ get mode() { return connection.rosterMode; } });
+
+// What the sign-in screen says after the connection signed out (a close code from the relay): why, in fixed words, for a removed device, and
+// what it always said for the rest. Nothing the relay sent is shown.
+export const signedOutText = (closed) => (closed?.code === 4030 ? EnrollmentTexts.forRefusal('removed') : 'The relay no longer accepts this sign-in. Sign in again.');
+
 export const openDeviceApproval = (source, make) => (rosterModeVisible(source?.mode) ? make() : null);
 
 // What proves a person is present at this device (section 4.6): kind is 'key', 'webauthn' or 'none'. The PWA has none yet (the passkey
@@ -32,6 +39,7 @@ export const EnrollmentTexts = {
   ENDED: 'This attempt has ended. Start again.',
   LOCKED: 'Joining is locked for 15 minutes.',
   GENERIC: 'This device could not be added.',
+  TOO_MANY_DEVICES: 'This account has too many devices connected or waiting. It will try again.',
 
   // A closed code to its words; anything else, or nothing, is the generic line. The refusal codes are placeholders until the relay fixes
   // them, so a renamed code degrades to the generic line.
