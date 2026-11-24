@@ -28,6 +28,7 @@ public sealed class LaunchOwnerLogTests : IDisposable
     [InlineData("phone")]
     [InlineData("script:0123456789abcdef0123456789abcdef/watch")]
     [InlineData("agent:not-a-device/agent_bridge_1111111111111111")]
+    [InlineData("agent:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/agent_bridge_1111111111111111")]
     [InlineData("agent:0123456789abcdef0123456789abcdef/")]
     public void A_person_a_script_or_a_malformed_launcher_leaves_no_agent_owner(string principal)
     {
@@ -61,6 +62,17 @@ public sealed class LaunchOwnerLogTests : IDisposable
         owners.Prune(_ => false, T.AddDays(14));
         Assert.Null(owners.OwnerOf(Session));
         Assert.Null(Open().OwnerOf(Session));
+    }
+
+    [Fact]
+    public void Exactly_seven_days_after_the_last_live_look_the_record_is_kept_and_one_second_later_it_is_not()
+    {
+        var owners = Open();
+        owners.Record(Session, Agent, T);
+        owners.Prune(_ => false, T.AddDays(7));
+        Assert.Equal(Agent, owners.OwnerOf(Session));
+        owners.Prune(_ => false, T.AddDays(7).AddSeconds(1));
+        Assert.Null(owners.OwnerOf(Session));
     }
 
     [Fact]
