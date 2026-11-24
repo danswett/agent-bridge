@@ -292,6 +292,57 @@ public sealed class ReplyClearTests
         }
     }
 
+    // #804 slice 2: a person's reply refused for a draft or shell mode in Copilot's box shows what is there; nothing is cleared or typed.
+    [Theory]
+    [InlineData("unfinished draft", false)]
+    [InlineData("draft ‮", false)]
+    [InlineData("ls -la", true)]
+    public async Task A_refused_person_reply_shows_the_box_escaped_with_its_mode_and_a_digest_and_offers_no_clear(string draft, bool shell)
+    {
+        await using var h = await Harness.Create(); h.Draft = draft; h.Shell = shell;
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null });
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Equal(shell ? ReplyRefusal.ComposerUnverified : ReplyRefusal.Occupied, result.Refusal);
+        var (shown, marks) = ShownText.RevealMarked(draft, rightToLeft: true);
+        var input = Assert.IsType<ReplyInput>(result.Input);
+        Assert.Equal((shown, false, shell ? "shell" : "text", EscapedApproval.Shown(shown), false), (input.Text, input.Truncated, input.Mode, input.Digest, input.Clearable));
+        Assert.Equal(marks.Select(m => new[] { m.Start, m.Length }), input.Marks.Select(m => m.ToArray()));
+        Assert.Equal((0, 0), (h.Clears, h.Replies));
+    }
+
+    [Fact]
+    public async Task A_long_box_is_cut_to_500_characters_but_its_digest_covers_the_whole_text()
+    {
+        await using var h = await Harness.Create(); h.Draft = new string('x', 600);
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null });
+        var input = Assert.IsType<ReplyInput>(result.Input);
+        Assert.Equal((500, true, EscapedApproval.Shown(h.Draft)), (input.Text.Length, input.Truncated, input.Digest));
+    }
+
+    [Theory]
+    [InlineData(false, ReplyIntent.Unknown)]
+    [InlineData(false, ReplyIntent.Queueable)]
+    [InlineData(true, ReplyIntent.Unknown)]
+    public async Task A_refusal_for_anything_but_a_person_shows_no_box_text(bool shell, ReplyIntent intent)
+    {
+        await using var h = await Harness.Create(); h.Draft = "private words"; h.Shell = shell;
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, IntentSource = () => intent });
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Null(result.Input);
+        Assert.DoesNotContain("\"input\"", JsonSerializer.Serialize(result, ProtocolJson.Options));   // the reason's own wording is unchanged
+    }
+
+    [Fact]
+    public async Task The_input_field_is_on_the_wire_only_when_there_is_one_and_an_empty_box_has_none()
+    {
+        await using var h = await Harness.Create(); h.Draft = "";
+        var sent = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null });
+        Assert.Equal(AnswerOutcome.Delivered, sent.Outcome);
+        Assert.DoesNotContain("\"input\"", JsonSerializer.Serialize(sent, ProtocolJson.Options));
+        var json = JsonSerializer.Serialize(new ReplyResult(AnswerOutcome.Refused, "r") { Input = new ReplyInput("a", [], false, "text", "d", false) }, ProtocolJson.Options);
+        Assert.Contains("\"input\":{\"text\":\"a\",\"marks\":[],\"truncated\":false,\"mode\":\"text\",\"digest\":\"d\",\"clearable\":false}", json);
+    }
+
     sealed class Harness : IConsoleInjector, IAgentHaBridgeProbe, ITargetGuard, IAsyncDisposable
     {
         readonly Fixture f = new();
