@@ -56,8 +56,10 @@ public sealed partial class LaunchFlowTests
     }
 
     // The point of the tick: a session a person launched with it, wearing the credential the launch really minted, can fleet.resume.
-    [Fact]
-    public async Task A_session_launched_with_the_tick_can_fleet_resume_with_the_credential_its_launch_minted()
+    [Theory]
+    [InlineData(true, "resumed", null)]
+    [InlineData(false, "refused", "policy")]   // without the tick the session is read-only: refused as a caller without the launch scope (policy)
+    public async Task A_session_launched_with_the_tick_can_fleet_resume_and_one_without_it_is_refused(bool tick, string outcome, string? reason)
     {
         var folder = Directory.CreateDirectory(Path.Combine(f.Root, "tick-resume")).FullName;
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName), JsonSerializer.Serialize(new
@@ -67,21 +69,21 @@ public sealed partial class LaunchFlowTests
         var credentials = new AgentCredentials(folder, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", rootAlive: (_, _) => true);
         var launcher = Launcher(Config(), credentials: credentials, agentLaunchOn: true);
         var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API", Prompt = "go",
-            AgentScope = AgentProtocol.ScopeReadReplyLaunch, CoordinatorRole = "quality-lead" }, "app");
+            AgentScope = tick ? AgentProtocol.ScopeReadReplyLaunch : null, CoordinatorRole = "quality-lead" }, "app");
         Assert.Equal(LaunchOutcome.Started, result.Outcome);
         var spec = Assert.Single(starter.Specs);
         var token = spec.Environment![Launchers.TokenVariable]!;
         var caller = credentials.Check(token, new([new PeerProcess(starter.Pids[0], DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted;
         Assert.NotNull(caller);
-        Assert.Equal(AgentProtocol.ScopeReadReplyLaunch, caller!.Scope);
+        Assert.Equal(tick ? AgentProtocol.ScopeReadReplyLaunch : AgentProtocol.ScopeRead, caller!.Scope);
         Assert.Equal(("quality-lead", "session", 0, true), (launcher.LaunchRole(caller.Session), caller.Kind, caller.Depth, credentials.IsLive(caller)));
         var resumed = new List<ResumeAsk>();
         var handler = new FleetResumeCommands(folder, credentials, launcher.LaunchRole, _ => true, _ => false,
             _ => new RestoreLaunch("copilot", "API", null, null, null, null, null, LaunchProtocol.Ask),
             (ask, _) => { resumed.Add(ask); return Task.FromResult(new LaunchResult(LaunchOutcome.Started, null) { Session = ask.Id }); });
         var receipt = await handler.HandleAsync(caller, JsonSerializer.SerializeToElement(new { version = 1, request = Guid.NewGuid(), session = Guid.NewGuid().ToString() }));
-        Assert.Equal(("resumed", null), (receipt.Outcome, receipt.Reason));
-        Assert.Single(resumed);
+        Assert.Equal((outcome, reason), (receipt.Outcome, receipt.Reason));
+        Assert.Equal(tick ? 1 : 0, resumed.Count);
     }
 
     sealed class NoCredentials : AgentBridge.Host.Delivery.ILaunchCredentials
