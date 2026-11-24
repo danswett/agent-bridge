@@ -1,7 +1,7 @@
-From b8785cb7f7663a81b1919daa4e5c1d3036d1b07e Mon Sep 17 00:00:00 2001
+From 5a03aee947df0e6794108219de7bb4059228aeba Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 21:33:14 -0800
-Subject: [PATCH] scratch 6a4
+Date: Mon, 23 Nov 2026 21:37:29 -0800
+Subject: [PATCH] scratch p6a4-new
 
 ---
  .github/workflows/ci.yml                      | 54 +-----------
@@ -11,7 +11,7 @@ Subject: [PATCH] scratch 6a4
  create mode 100644 tests/AgentBridge.Quality.Tests/StageStepsWorkflowTests.cs
 
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 85cbe77a3..a565cbd53 100644
+index 42a24cc1b..f6624a6a3 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -741,30 +741,8 @@ jobs:
