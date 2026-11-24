@@ -94,4 +94,38 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(outcome, receipt.Outcome);
         Assert.Equal(withRole ? 1 : 0, resumed.Count);
     }
+
+    // R11's rule 2: the role is also on the launch's audit rows (intent and terminal), written only for a person's launch.
+    [Fact]
+    public async Task A_person_launch_with_a_coordinator_role_writes_it_on_both_audit_rows_and_one_without_writes_none()
+    {
+        var profile = Path.Combine(f.Root, "audit-role", "default");
+        var launcher = Launcher(Config());
+        var ingress = new GateLaunchIngress("local", "person-client", "person:local", null);
+        var withRole = await GateLaunchAudit.LaunchAsync(launcher, new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API", Prompt = "go", CoordinatorRole = "quality-lead" },
+            "local", new AgentAuditLog(profile), ingress);
+        var without = await GateLaunchAudit.LaunchAsync(launcher, new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API", Prompt = "again" },
+            "local", new AgentAuditLog(profile), ingress);
+        Assert.Equal((LaunchOutcome.Started, LaunchOutcome.Started), (withRole.Outcome, without.Outcome));
+
+        var (rows, complete) = GateAuditProjection.Load(profile);
+        Assert.True(complete);
+        var launches = rows.Where(r => r.Action == "session.launch" && r.Gate is not null).ToArray();
+        Assert.Equal(new string?[] { "quality-lead", "quality-lead", null, null }, launches.Select(r => r.Gate!.CoordinatorRole).ToArray());
+        Assert.True(new AgentAuditLog(profile).Verify(launch: true).Intact);
+    }
+
+    [Fact]
+    public void A_coordinator_role_is_valid_on_a_persons_launch_rows_only()
+    {
+        var id = Guid.NewGuid();
+        var person = new GateAuditMetadata(1, id, Guid.Empty, 1, "intent", "local", "person-client", id, "none", CoordinatorRole: "sre");
+        Assert.True(person.Valid("session.launch", id.ToString(), "reserved"));
+        Assert.False((person with { ActorKind = "agent" }).Valid("session.launch", id.ToString(), "reserved"));
+        Assert.False(person.Valid("session.stop", id.ToString(), "reserved"));
+        Assert.False((person with { CoordinatorRole = "not a role" }).Valid("session.launch", id.ToString(), "reserved"));
+        Assert.False((person with { Phase = "control" }).Valid("session.launch", "profile", "sealed"));
+        // An absent role leaves the row's bytes as they were written before the field existed.
+        Assert.DoesNotContain("oordinatorRole", System.Text.Json.JsonSerializer.Serialize(person with { CoordinatorRole = null }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+    }
 }

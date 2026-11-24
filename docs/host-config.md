@@ -528,7 +528,7 @@ unsupported major version or read failure returns nonzero with a content-free er
 earlier output may be partial. An incomplete final JSON prefix is ignored with a warning.
 Archive, durable chain heads and pruning changes remain separate #1401 A6 slices.
 Optional `gate` metadata is versioned and allow-listed by the same reader. Its host-only
-ids, sequence, route, actor kind and bounded reason code contain no action text or hashes.
+ids, sequence, route, actor kind and bounded reason code contain no action text or hashes. A person's `session.launch` rows may also carry `coordinatorRole`, the plain role name the person gave the session (agent-resume.md); no other row can.
 The internal per-run projection reports observed totals and incomplete evidence, never
 a qualifying run or retirement verdict; it creates no profile, writer or lock.
 An unterminated final record also warns on stderr. A malformed record stops the read:
