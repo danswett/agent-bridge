@@ -1,22 +1,38 @@
-From 7e43ce8cad7f4b34c4e866ef961165b82caf6c63 Mon Sep 17 00:00:00 2001
+From b479cb1f38437eba207c25e66d7bd8fac800955f Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
 Date: Mon, 23 Nov 2026 22:09:48 -0800
 Subject: [PATCH] CI S2: FULL never writes a cache (CodeQL cache-poisoning
  alerts on #4254)
 
 full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test, so a cache written there could be poisoned by that
-code. FULL now only restores: the two cache saves in the spikes jobs go, and the Playwright system-packages action gets a save input (default true,
-so ci.yml is unchanged) that full.yml sets to false. Cache keys are unchanged. Test: full.yml has no cache save and calls the action with save false.
+code. FULL now only restores: the two cache saves in the spikes jobs go, and the Playwright system-packages action's save input defaults to FALSE (the
+safe default: a call that forgets it never writes a cache). ci.yml, which saves today, passes save: 'true' at each of its two calls; full.yml passes
+save: 'false'. Cache keys are unchanged. Test: full.yml has no cache save, calls the action with save false; the action defaults to false and gates its
+save on it; every ci.yml call says true.
+
+WHY A PR-WRITTEN CACHE CANNOT BE RESTORED INTO THE PRIVILEGED RUN UNVERIFIED. (1) Scope: GitHub lets a run restore only caches written on its own ref or
+the default branch's. A workflow_run runs on the default branch's ref, so it reads the default branch's caches only; a pull request's runs write to
+refs/pull/N/merge, which that run cannot read. The only writers into the default-branch scope are main's own push runs in ci.yml (their saves are guarded by
+github.event_name == 'push' && github.ref == 'refs/heads/main'; the action's archive save is unguarded but scoped to the run's own ref, so a PR's lands in the
+PR's scope), and, after this patch, no workflow_run. (2) Keys: full.yml's two restores are exact-key (no restore-keys): NuGet's key holds the hash of every
+csproj, Directory.* file, nuget.config, tool manifest and global.json, and the browsers' key holds the Playwright version from the lockfile. The action's archive
+restore uses a restore-key prefix, but it keeps the package list hash, and download.sh never installs a restored archive unverified: it checks each deb's
+hash against the live signed indexes apt just authenticated, and discards the cache locally on any mismatch. So no key needs to become main-only: none
+can be restored from a pull request.
+
+KNOWN COST (accepted): the spikes' NuGet and browsers caches had their only saves in full.yml, so nothing writes them any more and they stay cold: the
+spikes run slower, and are still correct. No new save logic is added.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
- .../playwright-system-packages/action.yml     |  8 +++++-
- .github/workflows/full.yml                    | 16 +++---------
- .../FullWorkflowTests.cs                      | 26 ++++++++++++++++++-
- 3 files changed, 35 insertions(+), 15 deletions(-)
+ .../playwright-system-packages/action.yml     |  8 ++++-
+ .github/workflows/ci.yml                      |  2 ++
+ .github/workflows/full.yml                    | 16 ++--------
+ .../FullWorkflowTests.cs                      | 30 ++++++++++++++++++-
+ 4 files changed, 41 insertions(+), 15 deletions(-)
 
 diff --git a/.github/actions/playwright-system-packages/action.yml b/.github/actions/playwright-system-packages/action.yml
-index 0b94d2bdf..207625413 100644
+index 0b94d2bdf..37297460b 100644
 --- a/.github/actions/playwright-system-packages/action.yml
 +++ b/.github/actions/playwright-system-packages/action.yml
 @@ -19,6 +19,12 @@ inputs:
@@ -25,10 +41,10 @@ index 0b94d2bdf..207625413 100644
      default: 'false'
 +  save:
 +    description: >
-+      'false' in full.yml, which runs in the default branch's context on a workflow_run and so never writes a cache (only restores);
-+      ci.yml leaves it true.
++      'true' only where the job may write the archives cache: each ci.yml call says so. The default is false, the safe one, and full.yml says false
++      itself: it runs in the default branch's context on a workflow_run and so never writes a cache (only restores).
 +    required: false
-+    default: 'true'
++    default: 'false'
  
  runs:
    using: composite
@@ -41,6 +57,26 @@ index 0b94d2bdf..207625413 100644
        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
        with:
          path: ~/.cache/playwright-apt-debs
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index c96461d9f..ec401b488 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1576,6 +1576,7 @@ jobs:
+           browsers: ${{ matrix.project }}
+           working-directory: pwa
+           force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
++          save: 'true'
+       - run: npx playwright install "$PROJECT"
+       - name: Save Playwright's browsers to main's cache
+         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+@@ -1681,6 +1682,7 @@ jobs:
+         with:
+           browsers: chromium webkit
+           working-directory: pwa
++          save: 'true'
+       - run: npx playwright install chromium webkit
+       - name: Save Playwright's browsers to main's cache
+         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
 index fe432bc54..91c2fb68c 100644
 --- a/.github/workflows/full.yml
@@ -94,10 +130,10 @@ index fe432bc54..91c2fb68c 100644
          working-directory: spikes/s2-noise-interop
          run: node js/test-browsers.mjs
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 03dc1bc5b..21bcdfc0d 100644
+index 03dc1bc5b..9c1537d2a 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-@@ -112,4 +112,28 @@ public class FullWorkflowTests
+@@ -112,4 +112,32 @@ public class FullWorkflowTests
  
          Assert.Empty(missing);
      }
@@ -121,7 +157,11 @@ index 03dc1bc5b..21bcdfc0d 100644
 +        Assert.NotEmpty(packageCalls);
 +        Assert.All(packageCalls, s => Assert.Equal("false", Scalar(s["with"], "save")));
 +        var action = Load(".github/actions/playwright-system-packages/action.yml");
-+        Assert.Equal("true", Scalar(((YamlMappingNode)action["inputs"])["save"], "default"));
++        Assert.Equal("false", Scalar(((YamlMappingNode)action["inputs"])["save"], "default")); // the safe default: a call that forgets it never writes a cache
++        var ciCalls = ((YamlMappingNode)Load(".github/workflows/ci.yml")["jobs"]).Children.Values
++            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>())
++            .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("./.github/actions/playwright-system-packages", StringComparison.Ordinal)).ToList();
++        Assert.All(ciCalls, s => Assert.Equal("true", Scalar(s["with"], "save"))); // ci.yml saves today, so it says so
 +        var save = ((YamlSequenceNode)((YamlMappingNode)action["runs"])["steps"]).Children.OfType<YamlMappingNode>()
 +            .Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/cache/save@", StringComparison.Ordinal));
 +        Assert.Contains("inputs.save == 'true'", Scalar(save, "if"), StringComparison.Ordinal);
