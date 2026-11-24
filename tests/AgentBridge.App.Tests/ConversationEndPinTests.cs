@@ -809,6 +809,25 @@ public sealed class ConversationEndPinTests
         Assert.Equal([29842.0], view.Scroller.Targets);
     }
 
+    // A wheel hold is not a held gesture for the release rule above: its notch ends in its own view changes, and
+    // one that raises none lapses. A row realised above the top block in its start window is still put back once
+    // the hold lapses; accepting it moved the view a notch plus the row (CI 45325080892: 48, 48, 48, 402, ...).
+    [Fact]
+    public void A_row_realised_during_a_wheel_start_window_is_still_kept_in_place_after_it_lapses()
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(30000);
+        view.TakeAnchorForProbe(40);
+        view.Scroller.Wheel();
+        view.BlockTopForProbe = 394;
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        view.LapseWheelForProbe();
+        view.LaidOutForProbe();
+        Assert.Equal([30354.0], view.Scroller.Targets);
+    }
+
     // #4243: a wheel notch's animation starts before its first view change reaches us. A correction of ours
     // landing in that gap (a row realised above the top block, an earlier-history prepend) is a ChangeView
     // without animation, which cancels the notch where it is: identical notches then move different distances.
