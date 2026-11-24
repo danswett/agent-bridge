@@ -86,14 +86,21 @@ namespace Microsoft.UI.Dispatching
     }
 }
 
+namespace Microsoft.UI.Input
+{
+    public sealed class PointerPointProperties { public int MouseWheelDelta { get; init; } }
+    public sealed class PointerPoint { public PointerPointProperties Properties { get; init; } = new(); }
+}
+
 namespace Microsoft.UI.Xaml.Input
 {
     public sealed record Pointer(uint PointerId, bool IsInContact);
 
-    public sealed class PointerRoutedEventArgs(Xaml.DependencyObject source, uint pointer = 1, bool contact = false)
+    public sealed class PointerRoutedEventArgs(Xaml.DependencyObject source, uint pointer = 1, bool contact = false, int wheel = 0)
     {
         public object OriginalSource => source;
         public Pointer Pointer { get; } = new(pointer, contact);
+        public UI.Input.PointerPoint GetCurrentPoint(UIElement? relativeTo) => new() { Properties = new() { MouseWheelDelta = wheel } };
     }
 
     public delegate void PointerEventHandler(object sender, PointerRoutedEventArgs args);
@@ -120,15 +127,16 @@ namespace Microsoft.UI.Xaml.Controls
             handlers.Add((routedEvent, (Input.PointerEventHandler)handler, handledEventsToo));
 
         public void Press(DependencyObject source, uint pointer = 1) => Raise(PointerPressedEvent, source, pointer, true);
-        public void Wheel() => Raise(PointerWheelChangedEvent, this);
+        // Positive turns the wheel away from the person (up the conversation), as WinUI reports it.
+        public void Wheel(int delta = 120) => Raise(PointerWheelChangedEvent, this, wheel: delta);
         public void EndGesture(string end, uint pointer = 1, bool contact = false) =>
             Raise(end switch { "release" => PointerReleasedEvent, "cancel" => PointerCanceledEvent, _ => PointerCaptureLostEvent }, this, pointer, contact);
 
-        void Raise(object routedEvent, DependencyObject source, uint pointer = 1, bool contact = false)
+        void Raise(object routedEvent, DependencyObject source, uint pointer = 1, bool contact = false, int wheel = 0)
         {
             foreach (var hook in handlers.Where(h => h.Event == routedEvent && h.HandledToo))
             {
-                hook.Handler(this, new(source, pointer, contact));
+                hook.Handler(this, new(source, pointer, contact, wheel));
             }
         }
 
