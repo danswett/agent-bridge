@@ -45,10 +45,24 @@ public sealed class AbCiWatchTests
             RunRecord(5, "2026-11-24T17:50:00Z", "push", branch: "main"));
         var json = runs.ToJsonString().Replace("'", "''");
 
-        var picked = JsonNode.Parse(Run($"Select-AbCiFirstRuns -Runs ('{json}' | ConvertFrom-Json) -Since ([datetime]'2026-11-24T18:00:00Z') -Repository 'danswett/agent-bridge' | ConvertTo-Json -Compress"))!;
+        var picked = JsonNode.Parse(Run($"Select-AbCiFirstRuns -Runs ('{json}' | ConvertFrom-Json) -Since ([datetime]'2026-11-24T18:00:00Z') -Repository 'danswett/agent-bridge' | ConvertTo-Json -Depth 5 -Compress"))!;
 
-        Assert.Equal(6, (long)picked["PullRequest"]!["id"]!);
-        Assert.Equal(8, (long)picked["Main"]!["id"]!);
+        // In order, the first few of each: a draft's run has no product job, so the next one is looked at.
+        Assert.Equal([6L, 9L], picked["PullRequest"]!.AsArray().Select(r => (long)r!["id"]!));
+        Assert.Equal([8L], picked["Main"]!.AsArray().Select(r => (long)r!["id"]!));
+    }
+
+    // ab-ci is an x64 pool: the arm64 product job runs hosted either way and is not the one to judge.
+    [Fact]
+    public void The_x64_product_job_is_judged_not_arm64_or_another_job()
+    {
+        var jobs = new JsonArray(
+            new JsonObject { ["id"] = 1, ["name"] = "plan" },
+            new JsonObject { ["id"] = 2, ["name"] = "product (windows-11-arm)" },
+            new JsonObject { ["id"] = 3, ["name"] = "product (windows-latest)" },
+            new JsonObject { ["id"] = 4, ["name"] = "product (ubuntu-latest)" }).ToJsonString().Replace("'", "''");
+
+        Assert.Equal("3", Run($"(Select-AbCiProductJob -Jobs ('{jobs}' | ConvertFrom-Json)).id"));
     }
 
     [Theory]
