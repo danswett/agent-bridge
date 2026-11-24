@@ -29,6 +29,9 @@ async function session(page) {
   }, { ID, turns: Array.from({ length: N }, (_, i) => turn(i + 1)) });
   const v = await open(page, ID);
   await expect(v.locator('.history-turn').nth(2)).toBeVisible();
+  // Older history loads as the reader nears the top (by a wheel), and moves the view: load it first, so no step is that.
+  for (let i = 0; i < 3; i += 1) { await wheel(page, v, -100000); await page.waitForTimeout(600); }
+  await wheel(page, v, 100000);
   await expect.poll(() => gap(v)).toBeLessThan(4);
   await settle(v);
   return v;
@@ -74,9 +77,15 @@ async function wheel(page, v, dy) {
   await settle(v);
 }
 
-for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['from 760 px up', { width: 1280, height: 800 }]]) {
+// Installed on an iPhone or iPad (platform ios, standalone) the reply area lies over the conversation's foot at every width.
+const INSTALLED = [['installed, 852 x 393', { width: 852, height: 393 }], ['installed, 852 x 600', { width: 852, height: 600 }], ['installed, 1024 x 768', { width: 1024, height: 768 }]];
+for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['from 760 px up', { width: 1280, height: 800 }], ...INSTALLED]) {
   test.describe(name, () => {
     test.use({ viewport, hasTouch: name === 'on a phone' });
+    test.beforeEach(async ({ page }) => {
+      if (!name.startsWith('installed')) { return; }
+      await page.addInitScript(() => Object.defineProperties(navigator, { standalone: { value: true }, userAgentData: { value: null }, userAgent: { value: 'iPhone' } }));
+    });
 
     test('it shows only more than a screen above the end, saying "Jump to latest", above the reply box, in no layout', async ({ page }) => {
       const v = await session(page);
@@ -92,6 +101,8 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       const reply = await v.locator('.reply-slot').boundingBox();
       const at = await pane(v).boundingBox();
       expect(p.y + p.height).toBeLessThanOrEqual(reply.y + 1);
+      // And it is what is under its own centre: not hidden behind the reply area, which would leave it unseen and untappable.
+      expect(await pill(v).evaluate((el) => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })).toBe(true);
       expect(Math.abs(p.x + p.width / 2 - (at.x + at.width / 2))).toBeLessThan(2);
     });
 

@@ -1967,8 +1967,7 @@ export class SessionCard {
 
   #questionSeen = true;
 
-  // The pill's words, and whether it shows (fading in and out as Arriving and leaving): from where the reader is and
-  // what arrived below since (ScrollFollow holds both), and whether a question waits at the end.
+  // The pill's words and whether it shows (fading as Arriving and leaving): where the reader is, what arrived, a question.
   #position = { away: false, count: 0 };
 
   #syncLatest(state = this.#position) {
