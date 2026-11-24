@@ -1,32 +1,25 @@
-From 62c7e049c6b03bb0d5d2074305454e7a52352f25 Mon Sep 17 00:00:00 2001
+From 5366803c88d644500a220471ac6f4a714434cae4 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 17:47:07 -0800
-Subject: [PATCH] CI S2, piece 5c: pwa-ui moves to full.yml with the
- apt-fallback proof; ci.yml has no workflow_dispatch left (Part of #4104)
-
-pwa-ui's six legs (Chromium and WebKit, a static matrix) move from ci.yml to full.yml with the commit under test checked out; full-gate
-needs it. Owner decision A, R8b: the pull-request-only 'repeat changed specs five times' step is dropped (flakes surface in FULL;
-tools/repeat-changed-specs.mjs stays). ci.yml's workflow_dispatch trigger, its force-apt-fallback input and the plan job's guard
-existed only for pwa-ui's apt-fallback proof, so they move to full.yml's dispatch: a run by hand is for a commit on main (the main
-ref) or a fallback proof on a branch's own new commit, never main's head or an open pull request's. The catalog marks both pwa-ui
-suites lane full (the WebKit post-merge tier is moot), merge-rule.yml's main_green drops the six legs and the browser infra_steps, and
-the merge-rule infra test targets light/ha-integration (the FAST jobs). Tests first.
+Date: Mon, 23 Nov 2026 21:32:51 -0800
+Subject: [PATCH] CI S2, piece 5c: pwa-ui moves to FULL (regenerated on main
+ with the critical-release dispatch kept in ci.yml)
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .../playwright-system-packages/download.sh    |   2 +-
  .../playwright-system-packages/test.sh        |   2 +-
- .github/workflows/ci.yml                      | 172 +-----------------
- .github/workflows/full.yml                    | 160 +++++++++++++++-
+ .github/workflows/ci.yml                      | 186 ++----------------
+ .github/workflows/full.yml                    | 160 ++++++++++++++-
  quality/README.md                             |  12 +-
  quality/catalog.yml                           |  10 +-
  quality/merge-rule.yml                        |  15 --
  .../AgentBridge.Quality.Tests/CiPlanTests.cs  |   2 +-
- .../FullWorkflowTests.cs                      |  37 +++-
+ .../CriticalReleaseTests.cs                   |   3 +-
+ .../FullWorkflowTests.cs                      |  38 +++-
  .../HaValidationCoverageTests.cs              |   2 +-
  .../MergeRuleTests.cs                         |   8 +-
  .../PlanScriptTests.cs                        |   4 +-
- 12 files changed, 218 insertions(+), 208 deletions(-)
+ 13 files changed, 232 insertions(+), 212 deletions(-)
 
 diff --git a/.github/actions/playwright-system-packages/download.sh b/.github/actions/playwright-system-packages/download.sh
 index 86c98cc7c..2474d91ff 100644
@@ -55,26 +48,31 @@ index a94d39fd2..6fb778c2e 100644
  from_canonical=$'Get:1 https://archive.ubuntu.com/ubuntu noble/main amd64 libgtk-4-1 amd64 4.14.2 [3170 kB]\nGet:2 https://archive.ubuntu.com/ubuntu noble/main amd64 xvfb amd64 2:21.1.12 [877 kB]'
  from_azure='Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libasound2t64 amd64 1.2.11 [390 kB]'
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 7e00b4d2f..f8c5a457b 100644
+index f930a1a52..85cbe77a3 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -8,15 +8,6 @@ on:
+@@ -8,16 +8,12 @@ on:
      # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
      # marking it ready must run the PR gate on the same head without waiting for another push.
      types: [opened, synchronize, reopened, ready_for_review]
 -  # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
--  # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
--  # writes no cache and runs every job (the whole ring).
--  workflow_dispatch:
--    inputs:
+-  # §4.7), or as Quality's critical-fix release of main's head (critical-release with a reason, on
+-  # main; docs/app-windows.md, "Spacing"); the plan job refuses anything else. Only the critical
+-  # release is a release (APP_RELEASE); a run by hand writes no cache and runs every job (the whole ring).
++  # By hand, only as Quality's critical-fix release of main's head (critical-release with a reason, on
++  # main; docs/app-windows.md, "Spacing"); the plan job refuses anything else. The apt fallback proof
++  # is full.yml's. Only the critical release is a release (APP_RELEASE); a run by hand writes no
++  # cache and runs every job (the whole ring).
+   workflow_dispatch:
+     inputs:
 -      force-apt-fallback:
 -        description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
 -        type: boolean
 -        default: false
- 
- permissions:
-   contents: read
-@@ -81,7 +72,6 @@ jobs:
+       critical-release:
+         description: Publish main's head as a critical fix inside the 15-minute release spacing (publish-prerelease.ps1 -SkipSpacing). Quality only, on an owner or Chief call; main only, with critical-reason
+         type: boolean
+@@ -90,7 +86,6 @@ jobs:
        app: ${{ steps.select.outputs.app }}
        app-installer: ${{ steps.select.outputs.app-installer }}
        light: ${{ steps.select.outputs.light }}
@@ -82,7 +80,7 @@ index 7e00b4d2f..f8c5a457b 100644
        suites: ${{ steps.select.outputs.suites }}
        test-projects: ${{ steps.select.outputs.test-projects }}
        # The whole ring is the whole solution on all three runners, without asking the selector.
-@@ -89,35 +79,6 @@ jobs:
+@@ -98,45 +93,21 @@ jobs:
        product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","windows-latest","windows-11-arm"]') || steps.select.outputs.product-os }}
        test-filter: ${{ steps.select.outputs.test-filter }}
      steps:
@@ -93,16 +91,31 @@ index 7e00b4d2f..f8c5a457b 100644
 -      # publishes), at a commit that is neither main's head nor any open pull request's. Anything
 -      # else fails here, before checkout, and every job after the plan is skipped. Push and pull
 -      # request runs skip this step, so they make no API call.
--      - name: A run by hand is a fallback proof on a commit of its own
--        if: github.event_name == 'workflow_dispatch'
--        env:
+-      - name: A run by hand is a fallback proof on a commit of its own, or a critical release of main
++      # A run by hand is Quality's critical release of main's head and nothing else (the apt fallback
++      # proof is full.yml's): a reason is required and is checked here, before checkout, so a run that
++      # asks for anything else, or for another branch, fails and every job after the plan is skipped.
++      # Push and pull request runs skip this step.
++      - name: A run by hand is a critical release of main
+         if: github.event_name == 'workflow_dispatch'
+         env:
 -          FORCE: ${{ inputs.force-apt-fallback }}
--          REF: ${{ github.ref }}
+           CRITICAL: ${{ inputs.critical-release }}
+           REASON: ${{ inputs.critical-reason }}
+           REF: ${{ github.ref }}
 -          SHA: ${{ github.sha }}
 -          REPO: ${{ github.repository }}
 -          GH_TOKEN: ${{ github.token }}
--        run: |
--          fail() { echo "::error title=force-apt-fallback::$1"; exit 1; }
+         run: |
+           fail() { echo "::error title=run by hand::$1"; exit 1; }
+-          if [ "$CRITICAL" = true ]; then
+-            # The critical-fix override (docs/app-windows.md, "Spacing"): main's head, past the release
+-            # spacing only, with a reason, checked here before anything is built.
+-            [ "$REF" = refs/heads/main ] || fail "critical-release only on main, not $REF"
+-            [ "$FORCE" != true ] || fail "critical-release and force-apt-fallback are separate runs"
+-            [ -n "$(printf '%s' "$REASON" | tr -d '[:space:][:cntrl:]')" ] || fail "critical-release needs critical-reason: why this fix may not wait"
+-            exit 0
+-          fi
 -          [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
 -          if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
 -            fail "only on a branch other than main, not $REF"
@@ -115,10 +128,13 @@ index 7e00b4d2f..f8c5a457b 100644
 -            [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
 -            [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
 -          done < "$RUNNER_TEMP/pr-heads"
++          [ "$CRITICAL" = true ] || fail "a run by hand is only for critical-release=true (the apt fallback proof is full.yml's)"
++          [ "$REF" = refs/heads/main ] || fail "critical-release only on main, not $REF"
++          [ -n "$(printf '%s' "$REASON" | tr -d '[:space:][:cntrl:]')" ] || fail "critical-release needs critical-reason: why this fix may not wait"
        - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
          with:
            persist-credentials: false
-@@ -235,7 +196,7 @@ jobs:
+@@ -254,7 +225,7 @@ jobs:
            # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
            # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
            # quality-gate's needs disagree (quality/README.md §4.7).
@@ -127,7 +143,7 @@ index 7e00b4d2f..f8c5a457b 100644
          run: |
            $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
            if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
-@@ -1351,7 +1312,7 @@ jobs:
+@@ -1373,7 +1344,7 @@ jobs:
          if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'epic-dashboard-unit')) }}
          run: python3 -m unittest discover -s tools/epic-dashboard -v
        # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
@@ -136,7 +152,7 @@ index 7e00b4d2f..f8c5a457b 100644
        # Without install scripts, as pages.yml builds the published site (#650), so a build that
        # needed one fails here first.
        - name: The PWA's packages
-@@ -1484,133 +1445,6 @@ jobs:
+@@ -1506,133 +1477,6 @@ jobs:
              echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
            fi
  
@@ -270,7 +286,7 @@ index 7e00b4d2f..f8c5a457b 100644
    quality-gate:
      # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
      # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
-@@ -1626,7 +1460,7 @@ jobs:
+@@ -1648,7 +1492,7 @@ jobs:
      # new gate's check only once every job it needs is done; under the same name, the draft's
      # green gate would stand for the whole head until then, and a merge could go through on it.
      name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
@@ -478,7 +494,7 @@ index b5023117e..dcaca6ade 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/quality/README.md b/quality/README.md
-index dc91cb747..b39e00e38 100644
+index 1ce9829c3..db7e6b8ba 100644
 --- a/quality/README.md
 +++ b/quality/README.md
 @@ -471,14 +471,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
@@ -502,7 +518,7 @@ index dc91cb747..b39e00e38 100644
       land on the commit, and the merge rule reads the latest run per head, so on a pull
       request's head they would stand in for its own run. One started there by mistake still
       leaves a failed CI run on that head, and since the merge rule takes the newest run,
-@@ -884,7 +886,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
+@@ -889,7 +891,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
    publish, which is safe but must be seen once), and the first train run is read by a person.
  * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
    (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
@@ -512,10 +528,10 @@ index dc91cb747..b39e00e38 100644
  **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
  `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 4944108eb..50903dd0f 100644
+index 5dd95d30e..d1f5c80df 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -911,10 +911,9 @@ suites:
+@@ -929,10 +929,9 @@ suites:
      # CI splits it (#457, #1836): pwa-ui runs three Chromium and three WebKit shards, leaving
      # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
      command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
@@ -529,7 +545,7 @@ index 4944108eb..50903dd0f 100644
      baseline: { files: 25 }
      status: exists
  
-@@ -1440,7 +1439,8 @@ suites:
+@@ -1471,7 +1470,8 @@ suites:
      # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. A known issue is
      # allowlisted by rule, selector and issue; none is today (#365, #366 and #371 are fixed).
      command: cd pwa && npx playwright test axe.spec.mjs keyboard.spec.mjs reduced-motion.spec.mjs
@@ -585,8 +601,22 @@ index a3e331bc6..df8fcb596 100644
          var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
          var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
          Assert.Equal(new[] { "plan", "app" },
+diff --git a/tests/AgentBridge.Quality.Tests/CriticalReleaseTests.cs b/tests/AgentBridge.Quality.Tests/CriticalReleaseTests.cs
+index bf10713d0..f10753641 100644
+--- a/tests/AgentBridge.Quality.Tests/CriticalReleaseTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CriticalReleaseTests.cs
+@@ -54,8 +54,7 @@ public class CriticalReleaseTests
+     [InlineData("true", "", "refs/heads/main", "false", "critical-release needs critical-reason")]
+     [InlineData("true", " \t\n", "refs/heads/main", "false", "critical-release needs critical-reason")]
+     [InlineData("true", "a reason", "refs/heads/fix", "false", "critical-release only on main")]
+-    [InlineData("true", "a reason", "refs/heads/main", "true", "separate runs")]
+-    [InlineData("false", "a reason", "refs/heads/main", "false", "a run by hand is only for force-apt-fallback=true")]
++    [InlineData("false", "a reason", "refs/heads/main", "false", "a run by hand is only for critical-release=true")]
+     public void Any_other_run_by_hand_on_main_is_refused_before_the_build(string critical, string reason, string reference, string force, string says)
+     {
+         var (code, output) = RunGuard(critical, reason, reference, force);
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 20ade2d3c..d0304f7e1 100644
+index 20ade2d3c..04feee120 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,8 +28,8 @@ public class FullWorkflowTests
@@ -600,7 +630,7 @@ index 20ade2d3c..d0304f7e1 100644
      }
  
      [Fact]
-@@ -116,4 +116,37 @@ public class FullWorkflowTests
+@@ -116,4 +116,38 @@ public class FullWorkflowTests
  
          Assert.Empty(missing);
      }
@@ -621,7 +651,7 @@ index 20ade2d3c..d0304f7e1 100644
 +    }
 +
 +    [Fact]
-+    public void A_run_by_hand_is_for_a_commit_on_main_or_a_fallback_proof_on_a_commit_of_its_own_and_ci_yml_has_no_dispatch_left()
++    public void A_run_by_hand_is_for_a_commit_on_main_or_a_fallback_proof_on_a_commit_of_its_own_and_ci_yml_keeps_a_dispatch_for_the_critical_release_only()
 +    {
 +        var on = (YamlMappingNode)Load(".github/workflows/full.yml")["on"];
 +        var inputs = (YamlMappingNode)((YamlMappingNode)on["workflow_dispatch"])["inputs"];
@@ -634,7 +664,8 @@ index 20ade2d3c..d0304f7e1 100644
 +        foreach (var rule in new[] { "refs/heads/main", "main's head", "open pull request's head", "INPUT_SHA", "force-apt-fallback" })
 +            Assert.Contains(rule, script, StringComparison.Ordinal);
 +        var ci = Load(".github/workflows/ci.yml");
-+        Assert.False(((YamlMappingNode)ci["on"]).Children.ContainsKey("workflow_dispatch"));
++        var ciInputs = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)ci["on"])["workflow_dispatch"])["inputs"];
++        Assert.Equal(["critical-release", "critical-reason"], ciInputs.Children.Keys.Select(k => k.ToString()));
 +        Assert.DoesNotContain("force-apt-fallback", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml")), StringComparison.Ordinal);
 +    }
  }
@@ -652,10 +683,10 @@ index 66d50d1aa..838a8e1e2 100644
          Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
          Assert.Equal("${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}",
 diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
-index df5347a6d..ec174a994 100644
+index 475060ef8..5b0893f22 100644
 --- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
-@@ -2849,15 +2849,17 @@ public class MergeRuleTests
+@@ -2852,15 +2852,17 @@ public class MergeRuleTests
      {
          var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
          var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
