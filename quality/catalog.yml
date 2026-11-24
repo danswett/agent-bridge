@@ -402,6 +402,20 @@ suites:
     where: ci.yml plan, quality-gate
     status: exists
 
+  - id: silent-revert-guard
+    validation_plan: native
+    kind: static
+    ring: 1
+    select: always
+    # #4465: PR #3968's merge of main silently reverted #4126 (code and tests together) and CI stayed green. On a pull request, for every line the change deletes against its base, this names the
+    # merged pull request that last changed it (git blame at the base, the "(#N)" of the squash subject) and any deleted test method, in the job summary and as a warning annotation. A warning
+    # only: it never fails the run, and the pull request's own number is left out. A step of ci.yml's plan job, which has no secrets; the step is a patch for Quality, so this is planned until it lands.
+    platforms: [linux-x64]
+    runner: hosted
+    command: dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll silent-revert --base HEAD^1 --head HEAD --pr <number>
+    where: ci.yml plan
+    status: planned
+
   - id: flake-hunt
     validation_plan: native
     kind: component
