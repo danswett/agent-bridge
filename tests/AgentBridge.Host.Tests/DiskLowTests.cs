@@ -22,7 +22,7 @@ public sealed class DiskLowTests : IDisposable
 
     void Config() => File.WriteAllText(Path.Combine(folder, HostSettings.FileName), JsonSerializer.Serialize(new
     {
-        agents = new { enabled = true, fleet = new { workspaces = new[] { "workers" } } },
+        agents = new { enabled = true, fleetLaunch = new { enabled = true }, fleet = new { workspaces = new[] { "workers" } } },
         launch = new { workspaces = new[] { new { label = "workers", path = folder, isolate = true } } },
     }));
 
