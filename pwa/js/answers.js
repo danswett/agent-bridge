@@ -7,10 +7,10 @@
 // the DOM; test/unit/answers.test.mjs covers it in Node.
 
 export const Limits = Object.freeze({
-  // Free text in an answer: session.answer's text, a text field, or a field's other.
-  text: 4 * 1024,
-  // The whole session.answer request as sent.
-  request: 16 * 1024,
+  // Free text in an answer: session.answer's text, a text field, or a field's other. As long as a reply (Limits.AnswerText, #2752).
+  text: 16 * 1024,
+  // The whole session.answer request as sent: that text plus 1 KiB for the ids and flags around it (Limits.AnswerRequest).
+  request: 17 * 1024,
 });
 
 const encoder = new TextEncoder();
