@@ -57,6 +57,12 @@ static partial class RunnerRouting
         // The dispatch alternative reads inputs.use_ab_ci: only a boolean input is safe ('false' as a string is truthy).
         var booleanDispatch = DispatchInputType(root, "use_ab_ci") == "boolean";
         var problems = new List<string>();
+        // R8c (#4306 P3-1): a merge key at the root or under jobs: brings in jobs this check never reads: fail closed.
+        if (root.Children.Keys.Concat(map.Children.Keys).Any(k => k is YamlScalarNode { Value: "<<" }))
+        {
+            problems.Add($"{file} uses a YAML merge key (<<) at the root or under jobs:, which can bring in jobs this check doesn't read");
+            jobs.Remove("<<");
+        }
         foreach (var (name, job) in jobs)
         {
             // Where a runner is chosen: the job's runs-on, and, for a reusable workflow's caller, each input that names the

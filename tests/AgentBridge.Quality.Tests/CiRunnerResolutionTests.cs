@@ -164,6 +164,12 @@ public sealed partial class CiRunnerResolutionTests
               - run: echo hi
         """));
 
+    // R8c (#4306 P3-1): a merge key at the root or under jobs: brings in jobs this check never reads.
+    [Theory]
+    [InlineData("<<: *base\nname: ci\non: [push]\njobs:\n  product:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n")]
+    [InlineData("name: ci\non: [push]\njobs:\n  <<: *base\n  product:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n")]
+    public void A_merge_key_at_the_root_or_under_jobs_fails_closed(string rest)
+        => Assert.NotEmpty(Check("x-base: &base { ab: { runs-on: ab-ci, steps: [{ run: echo hi }] } }\n" + rest.Replace("\\n", "\n")));
     [Fact]
     public void A_job_that_takes_its_runner_through_a_merge_key_fails_closed() => Assert.NotEmpty(Check("""
         name: ci

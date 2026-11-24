@@ -47,6 +47,13 @@ public class ProductOsPinTests
     [InlineData(AfterOutput, "Add-Content -Path ([Environment]::GetEnvironmentVariable('GITHUB_' + 'OUTPUT')) -Value x")]
     [InlineData(AfterOutput, "Write-Host ('::set-output name=product' + '-os::[\"ab-ci\"]')")]
     [InlineData(AfterOutput, "$lines += 'x=1'")]
+    // R8c (#4306 P2/P3): dot-sourcing, a built GITHUB_OUTPUT line, and an input or environment value as a product-os value.
+    [InlineData(AfterWrites, ". ./x.ps1")]
+    [InlineData(AfterWrites, ". $PSScriptRoot/x.ps1")]
+    [InlineData(AfterOutput, "Add-Content $env:GITHUB_OUTPUT ('product' + '-os=[\"ab-ci\"]')")]
+    [InlineData(AfterOutput, "$lines = @($lines) + ('product' + '-os=[\"ab-ci\"]')")]
+    [InlineData(AfterWrites, "$productOs = @($Platform)")]
+    [InlineData(AfterWrites, "$productOs = @($env:AB_CI_RUNNER)")]
     public void A_write_in_any_other_shape_is_caught(string after, string shape)
     {
         var plan = Plan();
@@ -64,6 +71,11 @@ public class ProductOsPinTests
     [InlineData("'win-arm64' = 'windows-11-arm'", "'win-arm64' = 'windows-11-arm'; 'x' = 'ubuntu-latest'")]
     [InlineData("'win-arm64' = 'windows-11-arm'", "'win-arm64' = \"windows-11-arm\"")]
     [InlineData("'win-arm64' = 'windows-11-arm'", "'win-arm64' = 'ab-ci'")]
+    [InlineData("'win-arm64' = 'windows-11-arm'", "'win-arm64' = $Platform")]
+    [InlineData("'win-arm64' = 'windows-11-arm'", "'win-arm64' = $env:AB_CI_RUNNER")]
+    [InlineData("ForEach-Object { $runners[$_] })\n#", "ForEach-Object { $Platform })\n#")]
+    // R8c: the help block ends at the FIRST #>, as PowerShell reads it, so a write after it on that line is code.
+    [InlineData(".SYNOPSIS\n", ".SYNOPSIS #> $productOs = @('ab-ci') <#\n")]
     [InlineData("ForEach-Object { $runners[$_] })\n#", "ForEach-Object { $runners[$_]; 'ab-ci' })\n#")]
     [InlineData("Where-Object { -not $platform", "Where-Object { $($productOs = 'ab-ci') -or -not $platform")]
     [InlineData("Where-Object { -not $platform", "Where-Object { (Set-Variable x 1) -or -not $platform")]
