@@ -34,6 +34,8 @@ public sealed class LiteDeliver(
     internal DeliveryLaneScheduler? Lane { get; init; }
     // claudeBusyQueue (docs/message-delivery.md, #3828): read afresh per send; null or throwing means off.
     internal Func<bool>? ClaudeBusyQueue { get; init; }
+    // Memory-only status of busy-Claude sends and the depth cap; used only with ClaudeBusyQueue on.
+    internal BusyQueueStore? BusyStore { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 
@@ -120,7 +122,20 @@ public sealed class LiteDeliver(
         // makes it ambiguous now, whatever it named a moment ago.
         if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession); }
         if (!Ready(now, busyQueue)) { return Refused(LiteCodes.Busy); }
-        if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
+        // Busy-Claude queue (#3856): one relay message per session at a time. A held slot or a full store refuses before any key, with its own code
+        // (never busy, which would allow the one HA fallback and so bypass the cap).
+        var store = busyQueue ? BusyStore : null;
+        var peer = Principal(body.Principal);
+        if (store is not null)
+        {
+            switch (store.TryBegin(body.Request, peer, id))
+            {
+                case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
+                case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
+            }
+        }
+        // The slot is taken before the rate token is spent, so a held or full refusal never burns the window and so never turns into busy (receipt 7110190967 P1-1).
+        if (!WithinRate(id)) { store?.Release(body.Request, peer); return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var framed = Frame(body.Principal, body.Request, safe);
@@ -131,19 +146,45 @@ public sealed class LiteDeliver(
         // stays theirs; one not confirmed puts back an arm still waiting, for the same reason.
         var driver = Drivers?.For(id);
         DriverArm? armed = null;
+        var keysWent = false;
         var reply = new ReplyRequest { Id = id, Request = body.Request, Text = framed, RequireIdle = !busyQueue, RequireEmptyBox = busyQueue,
             StillCurrent = byNode || stillAllowed is not null || account is not null
                 ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null,
-            KeysGoing = driver is null ? null : () =>
+            KeysGoing = () =>
             {
-                var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
-                armed = new DriverArm(saved, generation);
+                if (driver is not null)
+                {
+                    var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
+                    armed = new DriverArm(saved, generation);
+                }
+                // After arming: a failure above leaves keysWent false, so an exception that follows frees the slot instead of wedging it.
+                keysWent = true;
+                store?.KeysWent(body.Request, peer);
             } };
         void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
+        // The status record follows what the replier says: queued and unconfirmed stay held (Claude may still take the prompt); a delivered
+        // send frees the slot; a send that typed nothing frees it and leaves no record; keys that went with no clear result stay held.
+        void Record(ReplyResult? r)
+        {
+            if (store is null) { return; }
+            switch (r)
+            {
+                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true, peer); break;
+                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false, peer); break;
+                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); break;
+                default:
+                    // KeysGoing runs before the injector's own fence, so it proves nothing by itself: a result carries the replier's word (NoKeysSent frees the slot);
+                    // only a thrown exception, with no result, falls back to whether KeysGoing ran.
+                    var mayHaveBeenSent = r is null ? keysWent : r.KeyDisposition != ReplyKeyDisposition.NoKeysSent;
+                    if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); } else { store.Release(body.Request, peer); }
+                    break;
+            }
+        }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }
-        catch { Unarm(); throw; }
+        catch { Unarm(); Record(null); throw; }
         if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
+        Record(result);
         return result.Outcome switch
         {
             // With the flag on, a reply only the agent's own queue holds is accepted, not delivered: acked queued, and the arm stays for the prompt it will record.
