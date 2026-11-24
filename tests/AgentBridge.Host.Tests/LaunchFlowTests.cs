@@ -1593,9 +1593,41 @@ public abstract partial class LaunchFlowFixture
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 
-    // RED stub (#4229): the launch service's log, and a wait for one of its lines. Replaced by the real ones in the next commit.
-    private protected void Log(string line) => logged.Enqueue(line);
-    private protected Task WaitForLogAsync(string fragment, TimeSpan? backstop = null) => Task.CompletedTask;
+    // The launch service's log, as the host's log would have it, and a wait for one of its lines (#4229). The wait is driven by the line being logged,
+    // not polled on the wall clock: the host logs it from the launch's follow, which a loaded machine can be slow to get round to, and a 10 s poll could
+    // run out before it did. The backstop only ends a wait that can never be answered, and the failure says what the host did log.
+    readonly List<(string Fragment, TaskCompletionSource Done)> logWaits = [];
+    static readonly TimeSpan LogBackstop = TimeSpan.FromSeconds(60);
+
+    private protected void Log(string line)
+    {
+        logged.Enqueue(line);
+        lock (logWaits)
+        {
+            foreach (var wait in logWaits.Where(w => line.Contains(w.Fragment, StringComparison.Ordinal)).ToList())
+            {
+                wait.Done.TrySetResult();
+                logWaits.Remove(wait);
+            }
+        }
+    }
+
+    private protected async Task WaitForLogAsync(string fragment, TimeSpan? backstop = null)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (logWaits)
+        {
+            // Checked and registered together with Log's look at the waiters, so a line logged in between is never missed.
+            if (logged.Any(l => l.Contains(fragment, StringComparison.Ordinal))) { return; }
+            logWaits.Add((fragment, done));
+        }
+        try { await done.Task.WaitAsync(backstop ?? LogBackstop); }
+        catch (TimeoutException)
+        {
+            lock (logWaits) { logWaits.RemoveAll(w => w.Done == done); }
+            Assert.Fail($"the host never logged \"{fragment}\"; it logged: {string.Join(" | ", logged)}");
+        }
+    }
     private protected static async Task WaitAsync(Func<Task<bool>> done)
     {
         var until = DateTime.UtcNow + Patience;

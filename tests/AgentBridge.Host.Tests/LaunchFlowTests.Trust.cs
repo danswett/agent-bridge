@@ -328,7 +328,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         // Nor once the host has looked again and let the launch go: it was busy again then, when
         // it took the closed agent for one that had handed its session on and was still asking
         // (#416, whenever the question above came after that look).
-        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("closed: a person declined to trust the folder", StringComparison.Ordinal))));
+        await WaitForLogAsync("closed: a person declined to trust the folder");
         var later = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(later.TryGetProperty("busy", out _));
         Assert.False(later.TryGetProperty("trust", out _));
