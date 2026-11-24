@@ -1129,6 +1129,43 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Contains(AuditRows(), row => row.Contains(request) && row.Contains("kill-switch"));
     }
 
+    // G9c2 (R4zzB583 P2-2): each refusal writes exactly ONE source-side row, the signer is not asked when the mode starts off, and an unwritable
+    // audit is its own refusal.
+    [Fact]
+    public async Task A_sender_whose_mode_starts_off_never_asks_the_signer_and_writes_one_row()
+    {
+        using var key = P256KeyPair.Generate();
+        var signs = 0;
+        var s = OpenSender(key, mode: new Mode(false), audited: true, duringSign: (_, _) => signs++);
+        await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal(0, signs);
+        Assert.Single(AuditRows(), row => row.Contains(request));
+    }
+
+    [Theory]
+    [InlineData("peer-not-trusted")]
+    [InlineData("target-offline")]
+    public async Task A_peer_refusal_writes_one_source_row_with_its_code(string reason)
+    {
+        using var key = P256KeyPair.Generate();
+        var s = OpenSender(key, audited: true, serve: _ => Task.FromException<JsonElement>(reason == "target-offline"
+            ? new LitePeerOfflineException("gone") : new LitePeerNotTrustedException("not the same account")));
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, reason), (receipt.Result.Outcome, receipt.Reason));
+        Assert.Single(AuditRows(), row => row.Contains(request) && row.Contains(reason));
+    }
+
+    [Fact]
+    public async Task An_unwritable_audit_is_the_audit_unavailable_refusal_and_nothing_is_sent()
+    {
+        using var key = P256KeyPair.Generate();
+        var s = OpenSender(key, mode: new Mode(false), audited: true);
+        await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        using var blocked = new BlockedAuditFile(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single());
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, "audit-unavailable", 0), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls));
+    }
+
     [Theory]
     [InlineData("kill")]
     [InlineData("credential")]
