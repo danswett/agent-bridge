@@ -496,6 +496,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                     admitted.Add(candidate);
                 }
                 found = admitted;
+                // A session that is live again (resumed) is no longer one that ended: a later vanish must not read as a clean end.
+                foreach (var again in admitted) { _endedByHook.Remove(again.Id); }
             }
             held = HeldBy(observed);
             if (overflow.Count > 0) { held = WithUnread(held, overflow, $"the {MaxSessions}-session roster limit was reached"); }

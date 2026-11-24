@@ -49,10 +49,23 @@ public class CleanEndTests
     }
 
     [Fact]
-    public async Task A_session_the_source_never_saw_is_not_a_clean_end()
+    public async Task A_session_that_ended_cleanly_and_was_resumed_is_no_longer_remembered_as_ended()
     {
         using var f = new Fixture();
+        Running(f);
         await using var source = f.Source();
-        Assert.False(source.EndedByHook("never-seen"));
+        await source.RefreshAsync();
+        f.CodexRegistration(A, 800, f.CodexTranscript(A), status: "ended", ended: true, updated: Fixture.T0.AddMinutes(5));
+        await source.RefreshAsync();
+        Assert.True(source.EndedByHook(A));
+
+        // The same thread resumed in a new process, later than its end.
+        f.CodexRegistration(A, 801, f.CodexTranscript(A), updated: Fixture.T0.AddMinutes(10));
+        f.Processes.Run(AgentKind.Codex, 801, "codex.exe --no-daemon", Fixture.T0.AddMinutes(10));
+        f.Processes.Holders[f.CodexLock(A)] = [801];
+        await source.RefreshAsync();
+
+        Assert.Single(source.Snapshot());
+        Assert.False(source.EndedByHook(A));
     }
 }
