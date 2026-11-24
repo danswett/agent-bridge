@@ -1241,6 +1241,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
     var launcher = new LaunchService(deliveryGate, source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner()), log: Log), new LaunchServiceOptions
     {
         MachineName = machineName,
+        CoordinatorRoles = () => HostSettings.CurrentAgents(serveFolder!).Policy.ResumeRoles,
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,

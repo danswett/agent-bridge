@@ -10,9 +10,9 @@ using Xunit;
 // #4318 slice 3: a person's launch records its coordinatorRole in the launch record, no agent launch can, and fleet.resume reads it from there.
 public sealed partial class LaunchFlowTests
 {
-    async Task<(LaunchService Launcher, string Session)> PersonLaunch(object request)
+    async Task<(LaunchService Launcher, string Session)> PersonLaunch(object request, IReadOnlyList<string>? listed = null)
     {
-        var launcher = Launcher(Config());
+        var launcher = Launcher(Config(), coordinatorRoles: listed);
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher).HandleAsync;
         var ch = await OpenAsync();
         var o = await LaunchAsync(ch, request);
@@ -28,6 +28,29 @@ public sealed partial class LaunchFlowTests
         Assert.DoesNotContain(logged, line => line.Contains("worker role MCP"));
         var (other, bare) = await PersonLaunch(new { agent = "copilot", workspace = "API", prompt = "go" });
         Assert.Null(other.LaunchRole(bare));
+    }
+
+    // Typo catching: with agents.resume.roles listing roles, a person's launch naming another one is refused, saying what is allowed; an empty
+    // list keeps today's behaviour (the role is recorded and has no authority until a person lists it).
+    [Fact]
+    public async Task A_person_launch_naming_an_unlisted_coordinator_role_is_refused_when_roles_are_listed()
+    {
+        var listed = new[] { "quality-lead", "sre" };
+        var launcher = Launcher(Config(), coordinatorRoles: listed);
+        var typo = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API", Prompt = "go", CoordinatorRole = "qualty-lead" }, "app");
+        Assert.Equal(LaunchOutcome.Refused, typo.Outcome);
+        Assert.Contains("agents.resume.roles", typo.Reason);
+        Assert.Contains("quality-lead, sre", typo.Reason);
+        Assert.Empty(starter.Specs);
+        var (ok, session) = await PersonLaunch(new { agent = "copilot", workspace = "API", prompt = "go", coordinatorRole = "sre" }, listed);
+        Assert.Equal("sre", ok.LaunchRole(session));
+    }
+
+    [Fact]
+    public async Task With_no_roles_listed_a_person_launch_still_records_the_role_it_names()
+    {
+        var (launcher, session) = await PersonLaunch(new { agent = "copilot", workspace = "API", prompt = "go", coordinatorRole = "anything-at-all" }, []);
+        Assert.Equal("anything-at-all", launcher.LaunchRole(session));
     }
 
     [Theory]
