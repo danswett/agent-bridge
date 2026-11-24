@@ -94,6 +94,7 @@ public sealed class ScriptRunLauncherTaskTests
     [Fact]
     public void Only_the_launcher_itself_is_an_accepted_engine()
     {
+        if (!OperatingSystem.IsWindows()) { return; } // the pin checks drive-letter paths with Path.IsPathFullyQualified, which is Windows' rule
         var reader = new FakeTasks();
         var pinned = ScriptTaskBinding.Pin(@"\Fleet\Dispatcher", [], reader);
         Assert.Equal([Launcher, Pwsh, Script], pinned.Files.Select(f => f.Path));
@@ -107,6 +108,9 @@ public sealed class ScriptRunLauncherTaskTests
     [InlineData(Launcher)]
     [InlineData(Pwsh)]
     [InlineData(Script)]
-    public void An_unlocked_launcher_child_or_script_is_refused_at_the_mint(string unlocked) =>
-        Assert.Contains("without elevation", Assert.Throws<InvalidOperationException>(() => ScriptTaskBinding.Pin(@"\Fleet\Dispatcher", [], new FakeTasks(unlocked))).Message);
+    public void An_unlocked_launcher_child_or_script_is_refused_at_the_mint(string unlocked)
+    {
+        if (!OperatingSystem.IsWindows()) { return; } // the pin checks drive-letter paths with Path.IsPathFullyQualified, which is Windows' rule
+        Assert.Contains(unlocked, Assert.Throws<InvalidOperationException>(() => ScriptTaskBinding.Pin(@"\Fleet\Dispatcher", [], new FakeTasks(unlocked))).Message);
+    }
 }
