@@ -1,16 +1,8 @@
-From 70069def2dbf1077ae291b8798de7ce2199aad58 Mon Sep 17 00:00:00 2001
+From 0bf1ee3a2c68fdc4f2929a4cd863a32bb4054ae4 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 19:25:22 -0800
-Subject: [PATCH] Release train part B: attest (FULL's SBOMs), purge and the
- dry-run report (S2 piece C2b, Part of #4104)
+Date: Mon, 23 Nov 2026 21:37:25 -0800
+Subject: [PATCH] scratch train-b
 
-attest ports ci.yml's job to the train: provenance and SBOM attestations for the release's own assets, downloaded back, with FULL's SBOMs
-(the FAST run has none), in a job of its own with contents read plus the OIDC token; it runs when publish uploaded, even if publish then
-failed. purge (P0's train-3) refreshes the release-list CDN after a successful publish, in the release-purge environment; failing there
-never unpublishes anything. report says what a live run would have published whenever the train is not live, red when verification fails.
-Tests first: who may write, who may sign, who may have an environment, the three if: conditions, the SBOM source.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/release-train.yml           | 134 ++++++++++++++++++
  docs/app-windows.md                           |   3 +-
@@ -161,10 +153,10 @@ index b853eeff0..028254e07 100644
 +            exit 1
 +          fi
 diff --git a/docs/app-windows.md b/docs/app-windows.md
-index fc6edfc3e..9039ebe0e 100644
+index 6805cfc4d..0384f318b 100644
 --- a/docs/app-windows.md
 +++ b/docs/app-windows.md
-@@ -1261,7 +1261,8 @@ for a later app change either, so a green run publishes its own commit without w
+@@ -1294,7 +1294,8 @@ for a later app change either, so a green run publishes its own commit without w
    the version, the FAST run's id and **the FULL run's id**, which every download reads (the FAST run builds no package). `verify` installs and self-tests FULL's exact
    bytes on each architecture; **the package and its hash are required on both, the install and self-test are required on x64 and only recorded on Arm64** (the
    owner's waiver, said in the run's summary and in the publish summary). `publish` runs only while the repository variable `TRAIN_LIVE` is exactly `true`, never on a
@@ -175,10 +167,10 @@ index fc6edfc3e..9039ebe0e 100644
    as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
    unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 7cb74e314..791de812f 100644
+index 79223e922..a17bb9dbc 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -1010,12 +1010,12 @@ suites:
+@@ -1044,12 +1044,12 @@ suites:
      select: affected
      # The release train (S2, #4104; #2225): hourly and by hand it picks the newest main commit whose FAST and FULL lanes both passed, installs and self-tests FULL's exact
      # packages on both architectures (the Arm64 install and self-test only recorded: the owner's waiver) and, only while TRAIN_LIVE is true, publishes them, never a
