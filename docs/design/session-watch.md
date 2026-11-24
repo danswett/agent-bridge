@@ -59,12 +59,16 @@ records the deliberate ends and the clean exits it sees, and anything else alarm
 2. **A clean end the host can see**: the CLI's own `SessionEnd` hook, which the session source reads as positive "ended" evidence when it removes the
    session (`SessionSource.EndedByHook`). The owner's words were "CLI exit code 0", but the host cannot observe an exit code: the source finds sessions by
    snapshotting processes (`SessionSource`, `ProcessInspector`) and holds no process handle for a CLI. `SessionEnd` is the observable equivalent.
-   Only Codex has the hook installed today.
+   Codex has the hook. Claude has it once setup adds it (owner decision, Nov 23 about 23:05 PT, "Yes, with backup + notice": setup may add its own entries to
+   the CLI settings, backing the file up first, adding only its own entries, showing the person the change, removable, and writing no tokens). Copilot has none yet.
 
-R3 fires only for an owned session whose agent has such a signal (Codex today). A Claude or Copilot session never raises R3, because it would alarm on every
-normal exit; the log says "no clean-end signal". Adding a `SessionEnd` hook for Claude and Copilot changes their installed hooks, so it is a separate
-decision and slice; until it lands they stay out of R3. R3 also needs the owner record, so it stays quiet until that is hooked in. The watch itself
-stays default off.
+R3 fires only for an owned session whose agent can say it ended cleanly: always Codex, and Claude only for a session that **started after setup added the hook**.
+A hook is loaded when a session starts, so a Claude session already running when setup added it never loaded it, and its normal exit would read as a vanish.
+Setup therefore records when it first added the Claude hook (`intake.json`, `claudeSessionEndHookAt`; kept on a repeat, cleared on removal), and the watch counts
+Claude only for a session whose start is at or after that time. A Claude session with an unknown start, a profile with no recorded time (a migrated one), or
+a Copilot session never raises R3, because it would alarm on every normal exit; the log says "no clean-end signal". Known limits: a hook can be cut short
+when Claude exits, and a local process that can write the hook spool could forge an end (the same-user residual every hook event has). R3 also needs the owner
+record, so it stays quiet until that is hooked in. The watch itself stays default off.
 
 ### "Delivered": the signal that exists
 

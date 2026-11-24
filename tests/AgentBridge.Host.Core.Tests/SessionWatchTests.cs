@@ -184,17 +184,47 @@ public class SessionWatchTests
         new(new WatchSettings(), id => owned.Contains(id) ? Boss : null, ended);
 
     [Fact]
-    public void An_owned_Claude_or_Copilot_session_that_vanishes_never_raises_missing_and_the_log_says_why_once()
+    public void An_owned_Copilot_session_that_vanishes_never_raises_missing_and_the_log_says_why_once()
     {
         var log = new List<string>();
         var w = new SessionWatch(new WatchSettings(), id => Boss, _ => false, log.Add);
-        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Copilot })
-        {
-            w.Evaluate([S(SessionStatus.Working, T.AddHours(-1), agent.ToString()) with { Agent = agent }], T.AddMinutes(-1));
-            Assert.Empty(w.Evaluate([], T));
-            Assert.Empty(w.Evaluate([], T.AddHours(1)));
-        }
-        Assert.Equal(2, log.Count(l => l.Contains("no clean-end signal")));
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1), "cop") with { Agent = AgentKind.Copilot }], T.AddMinutes(-1));
+        Assert.Empty(w.Evaluate([], T));
+        Assert.Empty(w.Evaluate([], T.AddHours(1)));
+        Assert.Single(log, l => l.Contains("no clean-end signal"));
+    }
+
+    // A hook loads when a session starts, so Claude's SessionEnd counts only for a session that started after setup added it (S6 rollout risk).
+    static SessionWatch ClaudeWatch(DateTimeOffset? hookAt, List<string>? log = null) =>
+        new(new WatchSettings { CleanEndSince = hookAt is { } h ? new Dictionary<AgentKind, DateTimeOffset> { [AgentKind.Claude] = h } : new Dictionary<AgentKind, DateTimeOffset>() },
+            _ => Boss, _ => false, log is null ? null : log.Add);
+
+    static Session ClaudeStarted(DateTimeOffset? startedAt) => S(SessionStatus.Working, T.AddHours(-1)) with { Agent = AgentKind.Claude, StartedAt = startedAt };
+
+    [Fact]
+    public void A_Claude_vanish_raises_missing_only_for_a_session_that_started_after_the_SessionEnd_hook_was_added()
+    {
+        var after = ClaudeWatch(T.AddHours(-5));
+        after.Evaluate([ClaudeStarted(T.AddHours(-2))], T.AddMinutes(-1));
+        Assert.Equal(WatchRule.Missing, Assert.Single(after.Evaluate([], T)).Rule);
+
+        var log = new List<string>();
+        var before = ClaudeWatch(T.AddHours(-1), log);
+        before.Evaluate([ClaudeStarted(T.AddHours(-2))], T.AddMinutes(-1));
+        Assert.Empty(before.Evaluate([], T));
+        Assert.Single(log, l => l.Contains("no clean-end signal"));
+    }
+
+    [Fact]
+    public void A_Claude_vanish_raises_nothing_when_no_hook_time_is_recorded_or_the_session_start_is_unknown()
+    {
+        var none = ClaudeWatch(null);
+        none.Evaluate([ClaudeStarted(T.AddHours(-2))], T.AddMinutes(-1));
+        Assert.Empty(none.Evaluate([], T));
+
+        var unknownStart = ClaudeWatch(T.AddHours(-5));
+        unknownStart.Evaluate([ClaudeStarted(null)], T.AddMinutes(-1));
+        Assert.Empty(unknownStart.Evaluate([], T));
     }
 
     [Fact]

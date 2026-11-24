@@ -259,6 +259,8 @@ public sealed class StandaloneHooks(
         var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: false);
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
+        // Shown to the person (owner decision, Nov 23 about 23:05 PT): what is added, where, that only this product's own entries are touched, and the way back.
+        if (agent == "claude") { output.WriteLine($"{(dryRun ? "Would change" : "Changing")} {path}: adds this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd) and nothing else; your other settings and hooks are not touched. The original is kept once at {Path.Combine(HookFolder, "backups", "claude-settings.json")}. Remove restores it, taking out only these entries. No token is written."); }
         if (dryRun) { return; }
         if (agent == "claude" && before is not null)
         {
@@ -291,6 +293,8 @@ public sealed class StandaloneHooks(
             {
                 savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
             }
+            // When the Claude SessionEnd hook was first added, for the session watch: kept on a repeat, so the time never moves forward past a session that has it.
+            if (agent == "claude" && savedState.ClaudeSessionEndHookAt is null) { savedState = savedState with { ClaudeSessionEndHookAt = DateTimeOffset.UtcNow }; }
             savedState.Save(profile);
         }
         // Only now, after registrations, the Codex plugin and intake are all written, does the
@@ -354,6 +358,8 @@ public sealed class StandaloneHooks(
         // somebody else's additions must remain attributable, otherwise reinstall would have to
         // claim an unowned file or permanently refuse it; its record stays without completion.
         if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(incomplete)); }
+        // The hook is gone from the Claude settings, so the session watch must not count it any more.
+        if (agent == "claude" && IntakeState.Load(profile).State is { ClaudeSessionEndHookAt: not null } recorded) { (recorded with { ClaudeSessionEndHookAt = null }).Save(profile); }
         // Keep the private runtime and binary: sessions already open retain their commands.
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }
@@ -427,6 +433,8 @@ public sealed class StandaloneHooks(
             {
                 ("PreToolUse", "AskUserQuestion", "ask", 30), ("Notification", "", "notification", 30),
                 ("Stop", "", "stop", 30), ("SessionStart", "", "register", 15), ("UserPromptSubmit", "", "register", 15),
+                // The clean end the session watch needs (owner decision, Nov 23 about 23:05 PT: "Yes, with backup + notice"): short, prints nothing.
+                ("SessionEnd", "", "end", 5),
             })
             {
                 Add(hooks, name, new JsonObject { ["matcher"] = matcher, ["hooks"] = new JsonArray(new JsonObject
@@ -473,7 +481,7 @@ public sealed class StandaloneHooks(
 
     string ClaudeCommand(string name) => $"'{Hook.Replace("'", "'\\''")}' claude {name}";
 
-    bool OwnedClaudeCommand(string command) => new[] { "ask", "notification", "stop", "register" }
+    bool OwnedClaudeCommand(string command) => new[] { "ask", "notification", "stop", "register", "end" }
         .Any(n => string.Equals(command, ClaudeCommand(n), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
             || string.Equals(command, $"\"{Hook}\" claude {n}", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
 

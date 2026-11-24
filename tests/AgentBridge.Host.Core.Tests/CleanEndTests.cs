@@ -31,6 +31,35 @@ public class CleanEndTests
         Assert.True(source.EndedByHook(A));
     }
 
+    const string C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+    [Fact]
+    public async Task A_Claude_session_whose_own_session_end_arrived_is_remembered_as_a_clean_end_and_one_that_just_vanished_is_not()
+    {
+        using var f = new Fixture();
+        f.ClaudeRegistration(C, 700, null);
+        f.Processes.Run(AgentKind.Claude, 700);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Single(source.Snapshot());
+
+        f.ClaudeRegistration(C, 700, null, ended: true, updated: Fixture.T0.AddMinutes(5));
+        await source.RefreshAsync();
+        Assert.Empty(source.Snapshot());
+        Assert.True(source.EndedByHook(C));
+
+        using var g = new Fixture();
+        g.ClaudeRegistration(C, 701, null);
+        g.Processes.Run(AgentKind.Claude, 701);
+        await using var other = g.Source();
+        await other.RefreshAsync();
+        Assert.Single(other.Snapshot());
+        g.Processes.Exit(AgentKind.Claude, 701);
+        await other.RefreshAsync();
+        Assert.Empty(other.Snapshot());
+        Assert.False(other.EndedByHook(C));
+    }
+
     [Fact]
     public async Task A_Codex_session_whose_process_just_vanished_is_not_a_clean_end()
     {

@@ -90,7 +90,7 @@ public sealed class StandaloneHooksTests : IDisposable
 
     [Theory]
     [InlineData("copilot", "preToolUse", "agentStop", "notification")]
-    [InlineData("claude", "PreToolUse", "SessionStart", "UserPromptSubmit")]
+    [InlineData("claude", "PreToolUse", "SessionStart", "UserPromptSubmit", "SessionEnd")]
     [InlineData("codex", "PermissionRequest", "SessionStart", "SessionEnd")]
     public async Task Fresh_setup_is_repeatable_and_points_new_sessions_at_the_private_intake(string agent, params string[] events)
     {
@@ -113,6 +113,40 @@ public sealed class StandaloneHooksTests : IDisposable
             Assert.Equal(1, codex.Calls.Count(c => c.SequenceEqual(new[] { "plugin", "marketplace", "add", codex.Root })));
             Assert.Equal(3, (int)hooks["SessionEnd"]![0]!["hooks"]![0]!["timeout"]!);
         }
+    }
+
+    // The session watch counts a Claude SessionEnd only for sessions that started after the hook was added (a hook loads at session start): setup records
+    // when it first added it, a repeat setup keeps that time, a removal clears it, and other agents never set it.
+    [Fact]
+    public async Task Setup_records_when_it_first_added_the_Claude_SessionEnd_hook_keeps_it_on_a_repeat_and_removal_clears_it()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        Assert.Null(IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt);
+
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var first = IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt;
+        Assert.NotNull(first);
+
+        await Task.Delay(20);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.Equal(first, IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt);
+
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+        Assert.Null(IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt);
+    }
+
+    [Fact]
+    public async Task A_dry_run_says_what_it_would_change_and_writes_nothing_and_a_real_run_says_what_it_changed()
+    {
+        var dry = new StringWriter();
+        await Setup.InstallAsync("claude", true, dry);
+        Assert.Contains("Would change", dry.ToString());
+        Assert.DoesNotContain("Changing", dry.ToString());
+        Assert.False(File.Exists(Registration("claude")));
+
+        var real = new StringWriter();
+        await Setup.InstallAsync("claude", false, real);
+        Assert.Contains("Changing", real.ToString());
     }
 
     [Theory]
@@ -621,6 +655,33 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.True(File.Exists(Hook)); // Already-running sessions still need their executable.
         Assert.NotNull(IntakeState.Load(Profile).State);
         Assert.Equal(original, File.ReadAllText(Path.Combine(Profile, "hooks", "backups", "claude-settings.json")));
+    }
+
+    // Owner decision, Nov 23 about 23:05 PT ("Yes, with backup + notice"): setup may add a SessionEnd hook to the Claude settings, backing the file up first,
+    // adding only its own entry, telling the person, and removable without touching anything else. No token is written.
+    [Fact]
+    public async Task Claude_setup_adds_a_SessionEnd_hook_beside_the_persons_own_tells_the_person_and_removal_takes_only_ours()
+    {
+        var original = """
+            {"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"user-end-hook"}]}]}}
+            """;
+        Write(Registration("claude"), original);
+        var said = new StringWriter();
+
+        await Setup.InstallAsync("claude", false, said);
+
+        Assert.Equal(original, File.ReadAllText(Path.Combine(Profile, "hooks", "backups", "claude-settings.json")));
+        var ends = Read(Registration("claude"))["hooks"]!["SessionEnd"]!.AsArray();
+        Assert.Equal(2, ends.Count);
+        Assert.Contains("user-end-hook", ends.ToJsonString());
+        Assert.Contains(" claude end", ends.ToJsonString());
+        Assert.DoesNotContain("token", File.ReadAllText(Registration("claude")), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SessionEnd", said.ToString());
+        Assert.Contains(Registration("claude"), said.ToString());
+
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+        var left = Read(Registration("claude"))["hooks"]!["SessionEnd"]!.AsArray();
+        Assert.Equal("user-end-hook", (string?)left.Single()!["hooks"]![0]!["command"]);
     }
 
     [Theory]

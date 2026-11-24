@@ -56,7 +56,7 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
             null, null, null, e, spooled.Ancestors, spooled.ReceivedAt, time.GetUtcNow());
         return spooled.Key switch
         {
-            "claude/register" or "claude/stop" or "claude/ask" or "claude/notification" => Claude(spooled, notice),
+            "claude/register" or "claude/stop" or "claude/ask" or "claude/notification" or "claude/end" => Claude(spooled, notice),
             "codex/hook" => Codex(spooled, notice),
             "copilot/ask_user" or "copilot/agent_stop" or "copilot/permission" => notice,
             _ => throw new InvalidDataException($"no handler for {spooled.Key}"),
@@ -86,6 +86,11 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
                 transcript = ClaudeTranscript(sessionId, known);
                 status = "idle";
                 break;
+            case "end":
+                // Claude's own SessionEnd: the clean end the host can see (docs/design/session-watch.md, R3 end sources). The registration says Ended, as Codex's does.
+                transcript = ClaudeTranscript(sessionId, known);
+                status = null;
+                break;
             case "ask":
                 if (Str(e, "tool_name") != "AskUserQuestion") { return notice; }
                 transcript = ClaudeTranscript(sessionId, known);
@@ -101,9 +106,9 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
                 break;
         }
         var owner = ClaudeOwner(spooled.Ancestors);
-        WriteClaudeRegistration(sessionId, transcript, cwd, owner, status, At(spooled));
+        WriteClaudeRegistration(sessionId, transcript, cwd, owner, status, At(spooled), ended: spooled.Hook == "end");
         // A turn end, a new prompt or a session start proves any recorded question is over; a notification does not.
-        if (spooled.Hook is "stop" or "register") { RemoveAskMarker(sessionId); }
+        if (spooled.Hook is "stop" or "register" or "end") { RemoveAskMarker(sessionId); }
         if (ask is { } input2) { WriteAskMarker(sessionId, Str(e, "tool_use_id")!, input2, At(spooled)); }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status };
     }
@@ -228,7 +233,7 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
 
     // As Write-ClaudeSessionRegistration: a later event without a pid keeps the one known, and
     // one that sets no status keeps the last recorded, with its time.
-    void WriteClaudeRegistration(string sessionId, string? transcript, string cwd, int pid, string? status, string at)
+    void WriteClaudeRegistration(string sessionId, string? transcript, string cwd, int pid, string? status, string at, bool ended = false)
     {
         var path = ClaudePath(sessionId);
         using var existing = ReadJson(path);
@@ -249,6 +254,7 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
             w.WriteString("Updated", at);
             w.WriteString("HookStatus", hookStatus);
             w.WriteString("HookStatusAt", hookStatusAt);
+            if (ended) { w.WriteBoolean("Ended", true); }
         });
     }
 

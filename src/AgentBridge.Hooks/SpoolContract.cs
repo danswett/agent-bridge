@@ -48,6 +48,7 @@ public static class SpoolContract
         ["claude/stop"] = "",
         ["claude/ask"] = "",
         ["claude/notification"] = "",
+        ["claude/end"] = "",
         ["codex/hook"] = "",
         ["copilot/ask_user"] = "{\"permissionDecision\":\"allow\"}\n",
         ["copilot/agent_stop"] = "{}\n",

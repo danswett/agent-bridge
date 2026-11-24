@@ -12,10 +12,10 @@ public sealed record SessionWatchHandle(SessionWatchLoop Loop, Task Task);
 public static class SessionWatchStarter
 {
     public static SessionWatchHandle? Start(Func<bool> enabled, Func<IReadOnlyList<Session>> snapshot, Func<bool> held, Func<string, string?> ownerOf,
-        Func<string, bool> endedByHook, Action<string, string> notify, Func<DateTimeOffset> now, Action<string> log, Func<CancellationToken, Task> wait, CancellationToken ct)
+        Func<string, bool> endedByHook, IReadOnlyDictionary<AgentKind, DateTimeOffset> cleanEndSince, Action<string, string> notify, Func<DateTimeOffset> now, Action<string> log, Func<CancellationToken, Task> wait, CancellationToken ct)
     {
         if (!enabled()) { return null; }
-        var loop = new SessionWatchLoop(snapshot, held, new SessionWatch(new WatchSettings(), ownerOf, endedByHook, log), notify, now, log);
+        var loop = new SessionWatchLoop(snapshot, held, new SessionWatch(new WatchSettings { CleanEndSince = cleanEndSince }, ownerOf, endedByHook, log), notify, now, log);
         return new SessionWatchHandle(loop, Task.Run(async () =>
         {
             // Nothing may fault this task unseen: a loop that fails says so and ends, and a logger that throws is not allowed to hide it.
