@@ -86,6 +86,7 @@ public sealed class ScriptRunLauncherTaskTests
         public bool TaskLocked(string task) => true;
         public bool FileLocked(string path) => !string.Equals(path, openFile, StringComparison.OrdinalIgnoreCase);
         public string? FileSha256(string path) => new string('b', 64);
+        public bool LoggedOnOnly(string task) => true;
     }
 
     static ProcessAncestry Ancestry(string engineImage) => new(

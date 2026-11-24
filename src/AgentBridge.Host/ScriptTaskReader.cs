@@ -32,6 +32,13 @@ internal static class ScriptTaskXml
         + string.Concat(e.Attributes().Where(a => !a.IsNamespaceDeclaration).OrderBy(a => a.Name.LocalName, StringComparer.Ordinal).Select(a => $" {a.Name.LocalName}=\"{a.Value}\""))
         + ">" + (e.HasElements ? string.Concat(e.Elements().Select(Canon)) : e.Value.Trim()) + "</" + e.Name.LocalName + ">";
 
+    // Whether the task runs only while its user is logged on: ONE principal with ONE LogonType, InteractiveToken. Anything else (a stored password, S4U, which also runs
+    // logged off, a service account, a group, none) is false, as is anything that is not a task (the owner's Q-run-2 answer, 2026-11-24).
+    internal static bool LoggedOnOnly(string xml) =>
+        Root(xml) is { } task && task.Elements().Where(e => e.Name.LocalName == "Principals").ToList() is [{ } principals]
+        && principals.Elements().ToList() is [{ Name.LocalName: "Principal" } principal]
+        && principal.Elements().Where(e => e.Name.LocalName == "LogonType").ToList() is [{ } logon] && logon.Value.Trim() == "InteractiveToken";
+
     // SHA-256 of the task's actions, principal and triggers (not its registration date or settings), or null when the XML is not a task.
     internal static string? Definition(string xml)
     {
@@ -134,6 +141,8 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
     public string? Definition(string task) => Task(task, t => Get(t, "Xml") as string) is { } xml ? ScriptTaskXml.Definition(xml) : null;
 
     public IReadOnlyList<string>? ActionFiles(string task) => Task(task, t => Get(t, "Xml") as string) is { } xml ? ScriptTaskXml.ActionFiles(xml) : null;
+
+    public bool LoggedOnOnly(string task) => Task(task, t => Get(t, "Xml") as string) is { } xml && ScriptTaskXml.LoggedOnOnly(xml);
 
     // Each running instance's engine and when that process started (UTC); an engine whose start cannot be read is left out.
     public IReadOnlyList<ScriptTaskEngine> RunningEngines(string task)

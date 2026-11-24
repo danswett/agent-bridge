@@ -2,7 +2,8 @@
 
 Status: DESIGN ONLY, no code. **Needs Quality's sensitive read.**
 
-**Owner decision, 08:15 PT, 2026-11-24, answer "Accept all three (Recommended)":** Q-run-2 logged-on-only scheduled tasks (no stored password); Q-run-3 a Windows "allow changes?" prompt ONLY when the person presses a button in the app; Q-run-4 the app creates or edits the task through that button after showing exactly what will run. (Relayed by the Engineering Lead; the owner's own words are the option text quoted here, with no owner comment link.) Section 4 and section 8 record each answer where its question was; nothing in this note is open for the owner any more.
+**Owner decision, about 08:15 to 08:17 PT, 2026-11-24, answer "Accept all three (Recommended)":** Q-run-2 logged-on-only scheduled tasks (no stored password); Q-run-3 a Windows "allow changes?" prompt ONLY when the person presses a button in the app; Q-run-4 the app creates or edits the task through that button after showing exactly what will run. (Relayed by Chief S20 to the Quality Lead, not by the Engineering Lead; the owner's own words are the option text quoted here, with no owner comment link.) Section 4 and section 8 record each answer where its question was; nothing in this note is open for the owner any more.
+
 Part of #3305 (parent #1421); answers the OPEN item in [script-credentials.md](script-credentials.md) section 7, "How a script gets it".
 The credential format, the stored hash, the scope rules (`read+reply`, the allow-list) and the person-pressed mint, rotate and revoke are **unchanged**.
 
@@ -128,8 +129,11 @@ Windows user that runs the host**; `SYSTEM` or another account fails closed (`re
 - **Q-run-1 (design):** keep CurrentUser DPAPI (no format change; assumed here), or machine-scope so a `SYSTEM` task can read it? Machine scope lets every local
   account decrypt it and is a **format change**, so out of scope unless the owner asks.
 - **Q-run-2, answered by the owner (08:15 PT, 2026-11-24, "Accept all three (Recommended)"): logged-on-only scheduled tasks, no stored password.** The task is
-  registered "run only when the user is logged on", so the scheduler stores no password and no agent sets one. A dispatcher run therefore needs that user's session; a
-  task registered with a stored password is refused at the mint.
+  registered "run only when the user is logged on", so the scheduler stores no password and no agent sets one. A dispatcher run therefore needs that user's session.
+  **What follows, as Engineering's design reading and NOT the owner's words:** the mint refuses any task whose logon type is not `InteractiveToken` (a stored password,
+  `S4U`, which also runs while the user is logged off, a service account, a group, or no logon type at all). The launcher form of the task reader enforced this first
+  (#4511); the general member (`LoggedOnOnly`) now checks it for every bound task, at the mint and again when a credential is accepted (#4565), so no task with a
+  stored password or `S4U` can be bound.
 - **Q-run-4, answered by the owner (08:15 PT, 2026-11-24, "Accept all three (Recommended)"): the app creates or edits the task through that button, after showing exactly what will run.**
   The app's task-bound mint press creates or edits the task through the elevated step of Q-run-3, from what the person names in the press (task name, script, user), and
   shows them the exact program, arguments, files and user before the Windows prompt. No terminal and no agent is involved.
@@ -140,9 +144,9 @@ Windows user that runs the host**; `SYSTEM` or another account fails closed (`re
 
 | Order | Slice | Delivers | About | Acceptance and tests (RED first) |
 |---|---|---|---|---|
-| 1 | S3 | The Windows `IScriptTaskReader` (engine reads, task definition, ACL and file hashes) | 300 | Fakes plus real-Windows vectors: the engine is the `script-run` process; an intermediate engine is refused; an unlocked file is refused; `ActionFiles` always returns the executable and the `-File` script, and a user-writable one refuses the mint |
+| 1 | S3 | The Windows `IScriptTaskReader` (engine reads, task definition, ACL and file hashes) | 300 | Fakes plus real-Windows vectors: the engine is the `script-run` process; an intermediate engine is refused; an unlocked file is refused; `ActionFiles` always returns the executable and the `-File` script, and a user-writable one refuses the mint; any logon type other than `InteractiveToken` pins nothing for the launcher form (done), and the general logon-type member of `IScriptTaskReader` refuses it for every bound task at the mint and at accept (done, #4565) |
 | 2 | S1 | `script-run` launcher and `scripts.admit` | 300 | An unbound credential is never admitted; a non-descendant is refused; a refused or unwritable audit stops it; an unknown `scripts.admit` version is refused and an older launcher is still admitted; `scripts.finished` is accepted once, only from the admitted caller (pid and start), as a second row, and is best effort; the launcher loads no DLL from a redirectable place; a relative command, PowerShell without `-NoProfile`, and PATH lookup refused; `125` mapping; host-down fails closed; the token is in no argument, log or audit row |
-| 3 | S2 | The app's task-bound mint press, the launcher install and re-pin (the owner answered Q-run-2, Q-run-3 and Q-run-4 on 2026-11-24: not blocked) | 350 | The press shows the person the task, user, program and files; a re-pin is a rotation and the installer refuses an older launcher; a host update does not invalidate it; an unlocked program is refused at mint |
+| 3 | S2 | The app's task-bound mint press, the launcher install and re-pin (the owner answered Q-run-2, Q-run-3 and Q-run-4 on 2026-11-24: not blocked) | 350 | The press shows the person the task, user, program and files; a re-pin is a rotation and the installer refuses an older launcher; a host update does not invalidate it; an unlocked program is refused at mint; a task whose logon type is not `InteractiveToken` (a stored password, `S4U`) is refused at mint; the press shows the exact arguments the task will run |
 | 4 | S4 | The canary test (profile, logs, audit, task output, a forced-crash dump folder); doc updates (section 7 and the list of host operations in script-credentials.md, host-config.md and local-pipe.md, each naming `scripts.admit` and `scripts.finished`; the fleet README); a review of the dispatcher scripts for what they hand on | 200 | The planted token is found nowhere; a script that passes its environment to an untrusted child fails the review |
 
 S1 grew (versioning, `scripts.finished`, the no-DLL test, the native launcher) at the same 300 lines; if it passes the cap it splits into the launcher and `scripts.admit` / `scripts.finished`.
