@@ -9,6 +9,7 @@ public sealed class ScriptRunCoreTests
 {
     const string Pwsh = @"C:\Program Files\PowerShell\7\pwsh.exe";
     const string Script = @"C:\Locked\Cycle.ps1";
+    const string LauncherExe = @"C:\Program Files\Slipgates\script-run.exe";
     static readonly string[] Good = ["dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-File", Script];
 
     // ---- the command rules ----
@@ -60,7 +61,7 @@ public sealed class ScriptRunCoreTests
         foreach (var shape in shapes)
         {
             var tokens = CommandLine.Tokens(shape);
-            Assert.True((CommandLine.Parse(tokens) is not null) == (ScriptTaskXml.ActionFiles(Xml(shape)) is not null), $"the launcher and the pin disagree on: {shape}");
+            Assert.True((tokens is not null && CommandLine.Parse(tokens) is not null) == (ScriptTaskXml.ActionFiles(Xml(shape)) is not null), $"the launcher and the pin disagree on: {shape}");
         }
     }
 
@@ -68,6 +69,7 @@ public sealed class ScriptRunCoreTests
 
     sealed class Host(bool unavailable = false, bool refuse = false) : IHostPort
     {
+        public IReadOnlyList<string> Pinned { get; init; } = [LauncherExe, Pwsh, Script];
         public List<string> Calls { get; } = [];
         public Guid Id { get; } = Guid.NewGuid();
         public int? FinishedExit { get; private set; }
@@ -77,7 +79,7 @@ public sealed class ScriptRunCoreTests
             Calls.Add($"admit {name} v{version}");
             if (unavailable) { throw new HostUnavailableException(); }
             if (refuse) { throw new HostRefusedException(); }
-            return Task.FromResult(new Admission(Id, "abc.key"));
+            return Task.FromResult(new Admission(Id, "abc.key", Pinned));
         }
         public Task FinishedAsync(Guid admission, int exit, CancellationToken ct)
         {
@@ -174,6 +176,39 @@ public sealed class ScriptRunCoreTests
         Assert.All(fails.Starter.Block!, c => Assert.Equal('\0', c));
         Assert.All(fails.Tokens.LastToken!, b => Assert.Equal(0, b));
         Assert.DoesNotContain("SECRET", fails.Err);
+    }
+
+// The launcher compares what the OS handed it with what the host pinned: a differently-read argv runs nothing (#4524 P2-1).
+    [Fact]
+    public async Task An_argv_that_differs_from_the_pinned_files_is_refused_before_the_token_is_read()
+    {
+        var otherScript = await Run(Good, new Host { Pinned = [LauncherExe, Pwsh, @"C:\Locked\Other.ps1"] });
+        Assert.Equal((125, "refused" + Environment.NewLine), (otherScript.Exit, otherScript.Err));
+        var otherProgram = await Run(Good, new Host { Pinned = [LauncherExe, @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", Script] });
+        Assert.Equal(125, otherProgram.Exit);
+        var missingScript = await Run(Good, new Host { Pinned = [LauncherExe, Pwsh] });
+        Assert.Equal(125, missingScript.Exit);
+        foreach (var run in new[] { otherScript, otherProgram, missingScript }) { Assert.Equal(["admit dispatcher v1"], run.Host.Calls); }
+    }
+
+    [Fact]
+    public async Task The_crafted_argv_the_read_described_runs_nothing_because_the_script_it_would_run_is_not_the_pinned_one()
+    {
+        // What Windows hands pwsh for the crafted action: the first -File names the unpinned script, the pinned one is a later, ignored switch.
+        string[] argv = ["dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "x" + (char)34, "-File", @"C:\Evil\evil.ps1", ((char)34).ToString(), "-File", Script];
+        var run = await Run(argv);
+        Assert.Equal((125, "refused" + Environment.NewLine), (run.Exit, run.Err));
+        Assert.DoesNotContain("start", run.Host.Calls);
+    }
+
+    [Fact]
+    public async Task A_program_with_no_script_is_pinned_as_launcher_and_program_only()
+    {
+        var run = await Run(["dispatcher", "--", @"C:\Tools\cycle.exe"], new Host { Pinned = [LauncherExe, @"C:\Tools\cycle.exe"] });
+        Assert.Equal(0, run.Exit);
+        Assert.Contains("start", run.Host.Calls);
+        var extra = await Run(["dispatcher", "--", @"C:\Tools\cycle.exe"], new Host { Pinned = [LauncherExe, @"C:\Tools\cycle.exe", Script] });
+        Assert.Equal(125, extra.Exit);
     }
 
     [Fact]

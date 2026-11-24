@@ -3,7 +3,8 @@ using System.Text;
 namespace AgentBridge.ScriptRun;
 
 // What the host answered to scripts.admit: the admission id, and the name of the script's own protected credential file (never a path).
-public sealed record Admission(Guid Id, string File);
+// Pinned: the files the host pinned for this task, launcher first (then the child program, then its script, if it has one).
+public sealed record Admission(Guid Id, string File, IReadOnlyList<string> Pinned);
 
 public sealed class HostUnavailableException : Exception;
 public sealed class HostRefusedException : Exception;
@@ -28,7 +29,7 @@ public interface IChildStarter
     Task<int> RunAsync(string program, IReadOnlyList<string> arguments, char[] environment, CancellationToken ct);
 }
 
-public sealed record ChildCommand(string Name, string Program, IReadOnlyList<string> Arguments);
+public sealed record ChildCommand(string Name, string Program, IReadOnlyList<string> Arguments, string? Script = null);
 
 // `script-run <name> -- <absolute program> [args]`. The same allow-list the host pins the task's action with (ScriptTaskXml), so the launcher refuses exactly what the
 // pin refuses: a program that is a locked, fully qualified path on its own, or pwsh / powershell with -NoProfile, -NonInteractive and -File <fully qualified script>.
@@ -52,7 +53,7 @@ public static class CommandLine
             var name = rest[i][1..].ToLowerInvariant();
             if (name.Length <= 4 && "file".StartsWith(name, StringComparison.Ordinal))
             {
-                return noProfile && nonInteractive && i + 1 < rest.Count && Pinnable(rest[i + 1]) ? new(args[0], program, rest) : null;
+                return noProfile && nonInteractive && i + 1 < rest.Count && Pinnable(rest[i + 1]) ? new(args[0], program, rest, rest[i + 1]) : null;
             }
             if (name == "noprofile") { noProfile = true; }
             else if (name == "noninteractive") { nonInteractive = true; }
@@ -70,18 +71,31 @@ public static class CommandLine
         && !path[3..].Split('\\', '/').Any(s => s is "." or "..");
 
     // A task action's Arguments line, split the way the scheduler hands it to the program (quotes group, spaces separate).
-    public static List<string> Tokens(string line)
+    public static List<string>? Tokens(string line)
     {
+        // Windows' CommandLineToArgvW reads a backslash-quote as a literal quote; anything that could read differently here pins nothing (#4524).
+        if (line.Contains("\\\"", StringComparison.Ordinal)) { return null; }
         var tokens = new List<string>();
-        var current = new StringBuilder();
-        var quoted = false;
-        foreach (var c in line)
+        var i = 0;
+        while (i < line.Length)
         {
-            if (c == '"') { quoted = !quoted; }
-            else if (char.IsWhiteSpace(c) && !quoted) { if (current.Length > 0) { tokens.Add(current.ToString()); current.Clear(); } }
-            else { current.Append(c); }
+            if (char.IsWhiteSpace(line[i])) { i++; continue; }
+            if (line[i] == '"')
+            {
+                var close = line.IndexOf('"', i + 1);
+                if (close < 0 || (close + 1 < line.Length && !char.IsWhiteSpace(line[close + 1]))) { return null; }
+                tokens.Add(line[(i + 1)..close]);
+                i = close + 1;
+                continue;
+            }
+            var start = i;
+            while (i < line.Length && !char.IsWhiteSpace(line[i]))
+            {
+                if (line[i] == '"') { return null; }
+                i++;
+            }
+            tokens.Add(line[start..i]);
         }
-        if (current.Length > 0) { tokens.Add(current.ToString()); }
         return tokens;
     }
 }
@@ -100,6 +114,10 @@ public sealed class Launcher(IHostPort host, ITokenSource tokens, IChildStarter 
         try { admission = await host.AdmitAsync(command.Name, Version, ct); }
         catch (HostUnavailableException) { return Refuse("host-unavailable"); }
         catch (HostRefusedException) { return Refuse("refused"); }
+        // What the OS handed this process must be exactly what the host pinned: the same child program and the same script, or nothing runs (a parse that read it
+        // differently from the pin would otherwise run a script nothing pinned).
+        var expected = command.Script is null ? 2 : 3;
+        if (admission.Pinned.Count != expected || !Same(admission.Pinned[1], command.Program) || command.Script is { } script && !Same(admission.Pinned[2], script)) { return Refuse("refused"); }
         // The token is read only after the host has admitted this caller, held as bytes, written straight into the child's environment block and zeroed on every path.
         if (tokens.Read(admission.File) is not { } token) { return Refuse("refused"); }
         char[]? block = null;
@@ -120,6 +138,8 @@ public sealed class Launcher(IHostPort host, ITokenSource tokens, IChildStarter 
         catch (Exception e) when (e is IOException or HostRefusedException or HostUnavailableException or OperationCanceledException) { }
         return exit == Refusal ? 1 : exit;
     }
+
+    static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
     int Refuse(string code)
     {
@@ -143,9 +163,9 @@ public sealed class Launcher(IHostPort host, ITokenSource tokens, IChildStarter 
             block[at++] = '=';
             if (value is null) { foreach (var b in token) { block[at++] = (char)b; } }
             else { value.CopyTo(0, block, at, value.Length); at += value.Length; }
-            block[at++] = ' ';
+            block[at++] = '\0';
         }
-        block[at] = ' ';
+        block[at] = '\0';
         return block;
     }
 }
