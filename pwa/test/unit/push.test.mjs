@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { FILTER_DEFAULTS, pinnedIdsFor, readFilters } from '../../js/push-filters.js';
 import { PushRegistrar, base64UrlToBytes, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey, noticeTag, pushSupport } from '../../js/push.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { Reading } from '../../js/reading.js';
@@ -71,12 +72,13 @@ function client(capabilities = ['sessions.read', 'push']) {
   };
 }
 
-function registrar(win = browser(), { key = KEY } = {}) {
+function registrar(win = browser(), { key = KEY, pins = () => [], store = storage() } = {}) {
   const pm = pushManager();
   const keys = [key];
   const r = new PushRegistrar({
     win,
-    storage: storage(),
+    storage: store,
+    pins,
     registration: async () => ({ pushManager: pm }),
     fetchKey: async () => base64UrlToBytes(keys[0]),
     appUrl: 'https://danswett.github.io/agent-bridge/app/',
@@ -103,7 +105,10 @@ test('turning notifications on asks first, subscribes with the relay key and reg
   assert.deepEqual([...pm.subscribed[0].applicationServerKey], [...base64UrlToBytes(KEY)]);
   assert.deepEqual(host.requests, [{
     op: 'push.subscribe',
-    data: { endpoint: 'https://web.push.apple.com/sub-1', keys: { p256dh: 'p256dh-1', auth: 'auth-1' }, app: 'https://danswett.github.io/agent-bridge/app/', device: 'iPhone · Agent Bridge' },
+    data: {
+      endpoint: 'https://web.push.apple.com/sub-1', keys: { p256dh: 'p256dh-1', auth: 'auth-1' }, app: 'https://danswett.github.io/agent-bridge/app/', device: 'iPhone · Agent Bridge',
+      notify: { questions: true, pinned: true, all: false, deliveryFailures: false, pinnedSessions: [] },
+    },
   }]);
 });
 
@@ -609,4 +614,58 @@ test('an app updated to the new name keeps notifications on and its browser subs
   assert.equal(pm.subscribed.length, 1, 'no second browser subscription');
   assert.deepEqual(host.requests.map((q) => [q.op, q.data.endpoint, q.data.device]),
     [['push.subscribe', 'https://web.push.apple.com/sub-1', `iPhone · ${BRAND.name}`]]);
+});
+
+test('the filters start as questions and pinned on, every turn and delivery failures off', () => {
+  assert.deepEqual(FILTER_DEFAULTS, { questions: true, pinned: true, all: false, deliveryFailures: false });
+  assert.deepEqual(readFilters(null), FILTER_DEFAULTS);
+  assert.deepEqual(readFilters('not json'), FILTER_DEFAULTS);
+  assert.deepEqual(readFilters('{"questions":false,"all":"yes","extra":1}'), { ...FILTER_DEFAULTS, questions: false });
+});
+
+test('changing a filter is kept on this device and the next registration carries it with this machine\'s pinned ids', async () => {
+  const store = storage();
+  const asked = [];
+  const { r } = registrar(browser({ permission: 'granted' }), { store, pins: (c) => { asked.push(c); return ['s1', 's2']; } });
+  const host = client();
+  await r.enable(host, host.capabilities);
+  let changes = 0;
+  r.onChange(() => { changes++; });
+  r.setFilters({ questions: false, all: true });
+  assert.equal(changes, 1);
+  assert.deepEqual(r.filters, { questions: false, pinned: true, all: true, deliveryFailures: false });
+  assert.equal(await r.register(host, host.capabilities), true);
+  assert.deepEqual(host.requests.at(-1).data.notify,
+    { questions: false, pinned: true, all: true, deliveryFailures: false, pinnedSessions: ['s1', 's2'] });
+  assert.ok(asked.includes(host));
+  // A new page reads them back from the same storage.
+  assert.deepEqual(registrar(browser(), { store }).r.filters, { questions: false, pinned: true, all: true, deliveryFailures: false });
+});
+
+test('a filter that is not a boolean, or is unknown, changes nothing, and storage that fails is no error', () => {
+  const { r } = registrar();
+  r.setFilters({ questions: 'no', bogus: true });
+  assert.deepEqual(r.filters, FILTER_DEFAULTS);
+  const broken = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('full'); }, removeItem() {} };
+  const { r: r2 } = registrar(browser(), { store: broken });
+  r2.setFilters({ all: true });
+  assert.equal(r2.filters.all, true);
+});
+
+test('only this machine\'s pinned ids are sent, each 1 to 128 characters, at most 300, the latest kept', () => {
+  const keys = ['h1\ns1', 'h2\ns9', 'h1\n', `h1\n${'x'.repeat(129)}`, 'h1\ns2', 'h10\ns3', 'junk'];
+  assert.deepEqual(pinnedIdsFor(keys, 'h1'), ['s1', 's2']);
+  const many = Array.from({ length: 305 }, (_, i) => `h1\nid${i}`);
+  const sent = pinnedIdsFor(many, 'h1');
+  assert.equal(sent.length, 300);
+  assert.equal(sent.at(-1), 'id304');
+  assert.deepEqual(pinnedIdsFor(undefined, 'h1'), []);
+});
+
+test('closing stale question notices leaves a failures notice alone: it is no question', async () => {
+  const closed = [];
+  const notice = (data) => ({ data, close: () => closed.push(data.kind) });
+  const shown = [notice({ machine: 'h1', kind: 'failures', session: null, question: null }), notice({ machine: 'h1', kind: 'question', session: 's9', question: 'q9' })];
+  await closeStaleNotices({ getNotifications: async () => shown }, 'h1', new SessionsStore(), () => true);
+  assert.deepEqual(closed, ['question']);
 });

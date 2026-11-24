@@ -34,6 +34,27 @@ the row in parity.md section N whose first cell starts with those words. CI chec
 
 The checks live in `ChecklistTests`.
 
+### Phone approval audit evidence
+
+For [the per-client check](https://github.com/danswett/agent-bridge/issues/2649),
+the host subscribes to the existing `NoticeOutcome` hook. Its non-blocking queue
+drains into the existing private audit log before shutdown. No fixed node or new
+service is involved; each host retains its own existing profile audit files.
+The queue holds at most 64 pending outcomes. When full or closed, new outcomes
+are rejected without waiting for space, counted, and logged with a cumulative drop count.
+The existing row fields hold action `push`, direction `out`, recipient
+`person:<device>` (or `person:unknown`), question in `request`, session in `target`,
+kind `question` in `reason`, and the push-service outcome. No endpoint, keys,
+notification words or new audit fields are recorded.
+
+`PhoneApprovalEvidence.Read` reports those notices and distinct delivered questions
+per client alongside audited answers. Every expected client needs both delivery
+and an answer through the relay; missing identities, absent delivery and
+incomplete audit history never pass. An empty expected-client list is not proof.
+Here **delivered means accepted by the push service**, not received by the phone.
+Synthetic tests are not real-device or away-from-home evidence; those checks still
+need recorded audit rows and the device rehearsal.
+
 ## What runs where
 
 The rehearsal needs **two** disposable machines.
@@ -105,8 +126,19 @@ It creates only the resource group `rg-agent-bridge-rehearsal` (westus2, tagged
 `purpose=rehearsal-39`). That group holds a Windows 11 Pro VM `REHEARSAL-W` (Standard_D4s_v5,
 which runs nested virtualization for WSL2, with Standard_D4as_v5 as the fallback), a static
 public IP and an NSG. It refuses to run if `az` is signed in as anyone other than
-`-ExpectedAzureUser`, or if an existing group of that name lacks the tag. It needs Windows
-(the password file is DPAPI) and PowerShell 7.3 or later.
+the account named by the `AGENT_BRIDGE_REHEARSAL_AZURE_USER` environment variable (below), or if an
+existing group of that name lacks the tag. It needs Windows (the password file is DPAPI) and PowerShell 7.3 or later.
+
+**The sign-in it belongs to (one-time, in Windows settings).** The script, and `build/shadow-soak-vm.ps1`, which calls it, refuse
+unless `az` is signed in as the account the rehearsal belongs to. No address is kept in the repo and none is typed into a command:
+the account is read from a user environment variable, which you set once:
+
+1. Open Start and type **environment variables**, then choose **Edit environment variables for your account**.
+2. Under **User variables**, choose **New**. Name: `AGENT_BRIDGE_REHEARSAL_AZURE_USER`. Value: the account `az` is signed in as.
+3. Choose OK, then open a new terminal.
+
+Every command below then works as written. With the variable unset the script says so and stops before it writes anything,
+and the soak says so before it starts or stops anything (its `-Finish` would otherwise leave both VMs running and billing).
 
 Everything inside the VM is done through `az vm run-command`, not SSH. A proxied network can
 send SSH out from addresses other than its web traffic. Entra Global Secure Access does this,
@@ -366,7 +398,7 @@ Volatile files found so far: none. In run 1 (2026-10-31) B-08 was identical, byt
 | **D-04** | §14 "Migrate an existing" | Tool | What changed | Only hook registrations, agent config and the tasks (disabled). `~/.agent-ha-bridge` is untouched but for Codex's registration, `codex-bridge/plugins/agent-ha-bridge/hooks.json`, which agent-ha-bridge's installer keeps there, and Codex's cached copies of it, `~/.codex/plugins/cache/agent-ha-bridge/agent-ha-bridge/<version>/hooks.json` (#123); the tool counts them as hooks | `agent-bridge-rehearsal baseline compare --baseline $base --allow hooks --allow agents --allow tasks --step D-04` | #38 |
 | **D-05** | §14 "configure:" | VM-M | `agent-bridge-host workspace list` and `agent-bridge-host config show` | **Rehearsal** imported with its path and isolation. The default agent, permissions and worktree settings match the old `newSession.*` | `agent-bridge-rehearsal note --step D-05 --result pass --detail "<imported keys>"` | #38 |
 | **D-06** | §12 "A native hook spools", §12 "PowerShell fallback" | Tool | The host now delivers | Every capability, and delivering | `agent-bridge-rehearsal host --expect-delivering --timeout 60 --expect-cap sessions.answer --expect-cap sessions.approve --expect-cap sessions.reply --expect-cap sessions.attach --expect-cap sessions.stop --expect-cap sessions.launch --step D-06` | #38, #37 |
-| **D-07** | §18 "Per-machine online" | VM-M | `agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123`, `… homeAssistant.disposable true`, `… homeAssistant.enabled true`, `agent-bridge-host ha token set`, then restart the host from the app | The connector is on. The machine stays online on the disposable instance with the same ids, none numbered `_2` | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-online --expect-no-duplicates --timeout 120 --step D-07` | HA1 |
+| **D-07** | §18 "Per-machine online" | VM-M | `agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123`, `… homeAssistant.disposable true`, `agent-bridge-host ha token set`, `agent-bridge-host ha on`, then restart the host from the app | The connector is on. The machine stays online on the disposable instance with the same ids, none numbered `_2` | `agent-bridge-rehearsal ha --token-file $ha --slug $m --expect-online --expect-no-duplicates --timeout 120 --step D-07` | HA1 |
 
 ## Phase E: parity on the migrated machine
 
@@ -598,6 +630,10 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §8 "Only the publication writer" | N/A: tied to the HA writer role |
 | §9 "Offline machines" | Missing (#50, #51) |
 | §10 "Notification styling" | N/A: HA companion app only |
+| §10 "Notification paths with Home Assistant off" | Covered by tests, not a VM step: `PushFlowTests` (the PWA push flow with no Home Assistant connector) and `HaOffNotificationTests` (a source scan of the push and Windows toast code). The live part, ten finished-turn and ten question notices per client away from home, is the row 16 inventory in ha-s4-evidence-matrix.md, and stays open |
+| §10 "Reconnect never reannounces old work" | Covered by `PushNotifierTests` (a relay reconnect re-reads the same sessions); no scripted reconnect step yet |
+| §10 "Background push to iOS and iPadOS" | Missing: the APNs transport is not built (IOS-PUSH), and Apple machines are not in the rehearsal |
+| §10 "Delivery failures notice" | Missing on main: nothing calls the host's sender yet (the wiring is open, agent-bridge#4053), so there is nothing to exercise yet; it gets a step when it lands |
 | §11 "Transfers signed" | Intentionally different: signed commands replace the fleet secret |
 | §12 "Register hooks" | Missing for fresh installs (#54). A migrated machine keeps agent-ha-bridge's registrations, which D-04 and F-02 check |
 | §14 "Detect agents", §14 "Layout migration" | Missing (#54); N/A (migration starts from 1.33.x) |

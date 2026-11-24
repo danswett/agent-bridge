@@ -69,6 +69,8 @@ function read(raw) {
 export class SessionOrder {
   #state;
   #usable = true;
+  #pinListeners = new Set();
+  #told;
   #ended = [];
   // What the last arrange() showed, by group: moves are among the rows on screen, not among
   // rows remembered for sessions that aren't shown.
@@ -83,6 +85,7 @@ export class SessionOrder {
       raw = storage.getItem(KEY);
     } catch { this.#usable = false; }
     this.#state = read(raw);
+    this.#told = JSON.stringify(this.#state.pinned);
   }
 
   // Whether the order can be kept on this device. When it can't, the list is Most recent.
@@ -97,6 +100,12 @@ export class SessionOrder {
   }
 
   isPinned(key) { return this.#state.pinned.includes(key); }
+
+  // The pinned keys now, and a listener for when that set changes (a device's notification filters
+  // carry it to the machines, push-filters.js). Returns what removes the listener.
+  get pinnedKeys() { return [...this.#state.pinned]; }
+
+  onPinsChange(fn) { this.#pinListeners.add(fn); return () => this.#pinListeners.delete(fn); }
 
   get groups() {
     return Object.entries(this.#state.groupRecords.groups)
@@ -378,7 +387,17 @@ export class SessionOrder {
   // The account went: its ended sessions go with it.
   clearEnded() { this.#ended = []; }
 
+  #tellPins() {
+    const now = JSON.stringify(this.#state.pinned);
+    if (now === this.#told) { return; }
+    this.#told = now;
+    for (const fn of this.#pinListeners) {
+      try { fn(this.pinnedKeys); } catch (e) { console.error(e); }
+    }
+  }
+
   #save() {
+    this.#tellPins();
     if (!this.#usable) { return; }
     try {
       this.storage.setItem(KEY, JSON.stringify(this.#state));

@@ -5,11 +5,18 @@
 # publishes and deletes nothing. docs/app-windows.md, "Releases and updates".
 #
 #   pwsh build/publish-prerelease.ps1 -Version 0.1.600 -ReleasesDir out/app/releases, out/app-arm64/releases `
-#       -Repository danswett/agent-bridge -Commit <sha> -MainHead <sha> -MainRepo <dir> [-DryRun]
+#       -Repository danswett/agent-bridge -Commit <sha> -MainHead <sha> [-DryRun]
 #
-# -MainHead is main's head as the publish job read it, and -MainRepo a clone of main at it with
-# the selector built (tools/AgentBridge.Quality): a commit main has since moved past with app
-# changes isn't published, since main's later run publishes those (#938). A dry run needs neither.
+# -MainHead is main's head as the publish job read it: the commit must be on main's line. A commit
+# main has since moved past, app changes or not, still publishes; main's later run publishes its own
+# higher version over it (#4104). A dry run needs no -MainHead. -MainRepo is no longer read; it is
+# accepted so CI's call stays valid until ci.yml stops passing it.
+#
+# Releases are spaced (owner decision, release-spacing.ps1): a run publishes only once the newest
+# published release is 15 minutes old. A run inside that, or one that can't read the releases'
+# times, publishes nothing and says deferred=true; never dropped, publish-pending.ps1 re-runs it
+# once the window opens. -SkipSpacing -SkipSpacingReason <why> is the critical-fix override, CI's
+# critical-release dispatch, used only by Quality on an owner or Chief call; every other check holds.
 #
 # Each folder is one Velopack channel, read from the assets.<channel>.json vpk pack wrote there:
 # x64's `win`, the channel every copy installed before Arm64 builds reads, and Arm64's
@@ -36,14 +43,20 @@ param(
     [string]$MainRepo,
     [switch]$DryRun,
     [switch]$RequireSignature,
-    [string]$SignerEku
+    [string]$SignerEku,
+    [switch]$SkipSpacing,
+    [string]$SkipSpacingReason
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if (-not $DryRun -and ($MainHead -cnotmatch '^[0-9a-f]{40}$' -or -not $MainRepo)) {
-    throw "publishing needs -MainHead, main's head commit ('$MainHead'), and -MainRepo, a clone of main at it"
+if (-not $DryRun -and $MainHead -cnotmatch '^[0-9a-f]{40}$') {
+    throw "publishing needs -MainHead, main's head commit ('$MainHead')"
 }
+# The override is logged with who ran it and why, in the run and the release notes, on one line.
+$SkipSpacingReason = ($SkipSpacingReason -replace '\p{C}+', ' ').Trim()
+if ($SkipSpacing -and -not $SkipSpacingReason) { throw '-SkipSpacing needs -SkipSpacingReason: why this critical fix may not wait' }
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+. (Join-Path $PSScriptRoot 'release-spacing.ps1')
 if ($RequireSignature) {
     . (Join-Path $PSScriptRoot 'app-signing.ps1')
     Assert-AppSignerEku $SignerEku
@@ -87,7 +100,7 @@ function Invoke-GhRetry {
 }
 
 function Get-Release {
-    @(Invoke-GhRetry api "repos/$Repository/releases?per_page=100" --paginate --jq '.[] | {id, tag_name, draft, prerelease}' |
+    @(Invoke-GhRetry api "repos/$Repository/releases?per_page=100" --paginate --jq '.[] | {id, tag_name, draft, prerelease, published_at}' |
             Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
 }
 
@@ -179,7 +192,7 @@ if ($RequireSignature) {
     if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 }
 # --- Whether to publish: once per version, never a version older than one already out, never
-# a commit the latest release's commit isn't part of, and never one main has since changed the app past.
+# a commit the latest release's commit isn't part of, and never one off main's line.
 $releases = Get-Release
 $tagged = @(Invoke-Gh api "repos/$Repository/git/matching-refs/tags/$tag" --jq '.[].ref') -contains "refs/tags/$tag"
 $published = $tagged -or [bool]($releases | Where-Object { -not $_.draft -and $_.tag_name -eq $tag })
@@ -219,28 +232,38 @@ if ($publishing -and $released.Count -and -not $DryRun) {
     }
 }
 if ($publishing -and -not $DryRun -and $MainHead -cne $Commit) {
-    # And the other way round from that: a descendant's run created before this one has the lower
-    # version, so once this is out the checks above refuse it, and its app changes would never be
-    # released (#938's review). Its commit was pushed before this run was made, so it's in main's
-    # head as the publish job read it, under this lock. When main's selector and catalog, at that
-    # head, pick the app job for what came after this commit, main's later run builds the app and
-    # publishes it, this commit's changes with it; this one stands aside. A tail that leaves the
-    # app alone, docs only say, still publishes this, so main's head needn't be this commit.
-    # Anything that can't be read or isn't on main's line stops.
+    # A run publishes its commit even when main has since moved on with app changes: with runs of
+    # 40-60 minutes and frequent merges, standing aside for main's later run left every run stale
+    # (#4104). The later run then publishes its own higher version over this one. The trade (#938):
+    # GitHub promises no order between main's runs, so a descendant's run may have the lower
+    # version; the checks above then refuse it, and its app change waits for main's next run, which
+    # plans from the latest release: delayed, not lost. This commit must still be on main's line, as
+    # the publish job read it under this lock; anything that can't be read or isn't stops.
     $tail = [string](Invoke-Gh api "repos/$Repository/compare/$Commit...$MainHead" --jq '.status')
     if ($tail -cne 'ahead') { throw "main's head $MainHead doesn't follow $Commit (compare: '$tail'); not publishing $tag" }
-    $selector = Join-Path $MainRepo 'tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll'
-    $json = (& dotnet $selector select --repo $MainRepo --ring 1 --base $Commit --head $MainHead) -join "`n"
-    if ($LASTEXITCODE) { throw "the selector failed (exit $LASTEXITCODE) on $Commit..$MainHead; not publishing $tag" }
-    $selection = try { $json | ConvertFrom-Json -AsHashtable } catch { $null }
-    $jobs = if ($selection -is [Collections.IDictionary]) { $selection['jobs'] }
-    $ciJobs = if ($jobs -is [Collections.IDictionary]) { $jobs['ci.yml'] }
-    if ($jobs -isnot [Collections.IDictionary] -or ($null -ne $ciJobs -and $ciJobs -isnot [Collections.IDictionary])) {
-        throw "couldn't read the selector's jobs for $Commit..$MainHead; not publishing $tag"
+}
+# --- Spacing, last, so it only ever holds a run that would otherwise publish. Read under the publish
+# lock: the newest release, of any version or kind, that installed copies can see. A deferred run
+# leaves nothing behind, and main's next run plans from the latest release (ci.yml's release debt),
+# so this commit's changes go out with the next run that passes, or with this run's re-run.
+$spacingNote = $null
+if ($publishing -and -not $DryRun) {
+    $why = $null
+    try { $newest = Get-NewestRelease $releases ([DateTimeOffset](Get-Date)) }
+    catch { $why = "$($_.Exception.Message), so the release spacing can't be checked" }
+    if (-not $why -and $newest -and $newest.Age -lt $ReleaseSpacing) {
+        $why = "$($newest.Tag) was published $('{0:N1}' -f $newest.Age.TotalMinutes) minutes ago, under the owner's 15-minute release spacing"
     }
-    if ($ciJobs -and $ciJobs.Contains('app')) {
-        Write-Plan "main has moved on to $MainHead, which changes the app since $Commit; commit $MainHead must publish both, not $tag" -Warn
+    if ($why -and $SkipSpacing) {
+        $by = if ($env:GITHUB_ACTOR) { " by $env:GITHUB_ACTOR" } else { '' }
+        Write-Plan -Warn "publishing $tag as a critical fix: $why (-SkipSpacing$by`: $SkipSpacingReason)"
+        $spacingNote = "Published as a critical fix inside the 15-minute release spacing (manual override$by): $SkipSpacingReason"
+    } elseif ($why) {
+        # Never dropped: publish-pending.ps1 re-runs this publish once the newest release is 15
+        # minutes old, unless a later run of main's has published first.
+        Write-Plan -Warn "$tag waits: $why; publish-pending.ps1 re-runs this publish once it may go out"
         $publishing = $false
+        if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'deferred=true' }
     }
 }
 
@@ -392,6 +415,7 @@ if ($publishing) {
         $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })
         $notes = @(
             "Pre-release of the $AppProductName Windows app and host, built from main at $Commit$run."
+            $(if ($spacingNote) { ''; $spacingNote })
             ''
             $changeNotes
             ''

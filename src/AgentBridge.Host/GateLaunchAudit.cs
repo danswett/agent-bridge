@@ -15,7 +15,13 @@ internal static class GateLaunchAudit
         Action<string>? confirmed = null, Func<string, StopTarget?>? registeredTarget = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var id)) { return Refused("request must be a UUID"); }
-        if (!audit.Bootstrap()) { return Refused("the launch audit could not establish its existing evidence"); }
+        // Owner decision (b): an HA launch is still started when its audit cannot be written or read; the failure is recorded and counted.
+        if (!audit.Bootstrap())
+        {
+            if (ingress.Path != "legacy-ha") { return Refused("the launch audit could not establish its existing evidence"); }
+            audit.RecordUnauditedHa("launch", id.ToString());
+            return await launcher.LaunchAsync(request, peer, ct);
+        }
         long retained = 0;
         var (rows, complete) = GateAuditProjection.Load(audit.Profile, boundary: (floor, _) => retained = floor);
         var matching = rows.Where(r => r.Action == "session.launch" && r.Request == id.ToString()).ToArray();
@@ -24,7 +30,10 @@ internal static class GateLaunchAudit
             retainedThrough: retained);
         if (!complete || (first is not null && report.Invalidated) || report.IncompleteReasons.Contains("sequence-break")
             || !audit.Verify().Intact || !audit.Verify(launch: true).Intact)
-        { return Refused("the launch audit is incomplete; check for an existing launch at the machine"); }
+        {
+            if (ingress.Path == "legacy-ha" && first is null) { audit.RecordUnauditedHa("launch", id.ToString()); return await launcher.LaunchAsync(request, peer, ct); }
+            return Refused("the launch audit is incomplete; check for an existing launch at the machine");
+        }
         var binding = LaunchService.RequestBinding(request);
         if (first is not null)
         {
@@ -57,7 +66,12 @@ internal static class GateLaunchAudit
                 ingress.Path, ingress.ActorKind, operation, "none", LaunchBinding: binding);
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
                 ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = ingress.Grant ?? (fleet ? "fleet" : null) };
-            if (!audit.Append(intent)) { return null; }
+            if (!audit.Append(intent))
+            {
+                if (ingress.Path != "legacy-ha") { return null; }
+                audit.RecordUnauditedHa("launch", id.ToString());
+                return _ => { };
+            }
             return session =>
             {
                 var process = registeredTarget?.Invoke(session) is { } target && target.Session == session ? target.ProcessInstance : null;

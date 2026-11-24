@@ -90,6 +90,65 @@ public sealed class LaunchReplyActivityTests
         Assert.Empty(r.Typed);
     }
 
+    // #3538: a launched session that is plainly working (it wrote tool events) and has an open question or permission
+    // request is refused, rightly (a reply could answer it), but never as "still starting" or "never showed it was ready":
+    // it is waiting for an answer, and the words must say so for as long as it is.
+    [Theory]
+    [InlineData(false, "ask")]
+    [InlineData(true, "ask")]
+    [InlineData(false, "permission")]
+    [InlineData(true, "permission")]
+    public async Task A_working_launch_with_an_open_question_or_permission_is_waiting_for_an_answer_not_starting(bool followed, string gate)
+    {
+        await using var r = new Rig();
+        await r.BeginAsync(followed);
+        Fixture.Append(r.Events, Copilot.ToolStart("work", "powershell", new { }, 3601), Copilot.ToolDone("work", 3602));
+        r.Rows = Rig.Ready;
+        if (gate == "ask") { Fixture.Append(r.Events, Copilot.ToolStart("question", "ask_user", new { message = "Which?" }, 3603, agentId: "helper")); }
+        else { Fixture.Append(r.Events, Copilot.Event("permission.requested", new { requestId = "permission", permissionRequest = new { kind = "shell" } }, 3603)); }
+
+        var result = await r.ReplyAsync();
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Empty(r.Typed);
+        Assert.Contains("waiting for an answer", result.Reason);
+        Assert.DoesNotContain("still starting", result.Reason);
+        Assert.DoesNotContain("never showed", result.Reason);
+    }
+
+    // The same launch with no activity at all, and nothing open, is still starting: those words stay for it.
+    [Fact]
+    public async Task A_launch_with_no_activity_and_nothing_open_is_still_said_to_be_starting()
+    {
+        await using var r = new Rig();
+        await r.BeginAsync(followed: false);
+        r.Rows = Rig.Ready;
+
+        var result = await r.ReplyAsync();
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("still starting", result.Reason);
+    }
+
+    // #3538: a first reply the host cannot yet tell is safe says WHICH check failed, so a sender or a person can act.
+    [Theory]
+    [InlineData(true, "could not read the session's screen")]
+    [InlineData(false, "does not see the session's input box")]
+    public async Task A_first_reply_held_for_the_screen_names_the_check_that_failed(bool unreadable, string words)
+    {
+        await using var r = new Rig();
+        await r.BeginAsync(followed: true);
+        r.Replier.LaunchHeld = null;
+        r.Rows = unreadable ? null : [];
+
+        var result = await r.ReplyAsync();
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Empty(r.Typed);
+        Assert.Contains(words, result.Reason);
+        Assert.DoesNotContain("still starting", result.Reason);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

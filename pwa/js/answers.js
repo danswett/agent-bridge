@@ -7,10 +7,10 @@
 // the DOM; test/unit/answers.test.mjs covers it in Node.
 
 export const Limits = Object.freeze({
-  // Free text in an answer: session.answer's text, a text field, or a field's other.
-  text: 4 * 1024,
-  // The whole session.answer request as sent.
-  request: 16 * 1024,
+  // Free text in an answer: session.answer's text, a text field, or a field's other. As long as a reply (Limits.AnswerText, #2752).
+  text: 16 * 1024,
+  // The whole session.answer request as sent: that text plus 1 KiB for the ids and flags around it (Limits.AnswerRequest).
+  request: 17 * 1024,
 });
 
 const encoder = new TextEncoder();
@@ -124,6 +124,8 @@ export function checkAnswer(question, answer) {
     // Empty text is typed as nothing, which a form records as no answer at all, and text of only
     // spaces, or of control characters a host types as spaces, might be recorded trimmed to that
     // (Answers.Check, FieldConstraints.BlankOnceTyped).
+    // A required multi-select needs at least one choice, for every agent (owner decision, Nov 23).
+    if (field.required === true && field.type === 'multi' && Array.isArray(value) && value.length === 0) { return `"${label(field)}" needs an answer`; }
     if (field.required === true && field.type === 'text' && typeof value === 'string' && value.replace(/\p{Cc}/gu, ' ').trim() === '') { return `"${label(field)}" needs an answer`; }
     const problem = valueProblem(field, value);
     if (problem) { return `"${label(field)}": ${problem}`; }
