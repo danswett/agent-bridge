@@ -20,7 +20,7 @@ public static class FleetLaunchCommands
         public string Action => "launch";
         public string Time => DateTime.UtcNow.ToString("O");
     }
-    static readonly string[] Reasons = ["grant-missing", "grant-expired", "grant-revoked", "grant-exhausted", "scope",
+    internal static readonly string[] Reasons = ["grant-missing", "grant-expired", "grant-revoked", "grant-exhausted", "scope",
         "name-gate", "duplicate-id", "duplicate-store-full", "target-offline", "kill-switch", "peer-not-trusted",
         "person-required", "audit-unavailable", "policy", "bad-argument", "unavailable"];
 

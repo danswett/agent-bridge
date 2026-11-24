@@ -239,6 +239,29 @@ public sealed class AgentCredentialJobTests : IDisposable
     }
 
     [Fact]
+    public void A_refusal_logs_the_callers_chain_as_image_names_and_pids_and_nothing_else()
+    {
+        var lines = new List<string>();
+        var store = Store(null, lines);
+        var token = store.Prepare("sess-1", "launch-1")!;
+        store.Bind("launch-1", 100, Started);
+        var chain = new ProcessAncestry([new(300, CallerStarted, @"C:\Program Files\Tools\pwsh.exe"), new(200, CallerStarted, "C:\\Users\\someone\\evil\nname.exe -Command secret"), new(150, null, null)], true);
+        Assert.Null(store.Check(token, chain).Accepted);
+        var line = Assert.Single(lines, l => l.Contains("outside its session"));
+        Assert.Contains("caller chain 300 pwsh.exe <- 200 evilname.exe-Commandsecret <- 150 ?", line);
+        Assert.DoesNotContain("Program Files", line);
+        Assert.DoesNotContain("someone", line);
+        Assert.DoesNotContain(token, line);
+        Assert.DoesNotContain('\n', line);
+        // A long chain is bounded.
+        lines.Clear();
+        store.Check(token, new ProcessAncestry([.. Enumerable.Range(1, 40).Select(i => new PeerProcess(1000 + i, CallerStarted, "x.exe"))], true));
+        var bounded = Assert.Single(lines, l => l.Contains("outside its session"));
+        Assert.Contains("1012 x.exe <- ...", bounded);
+        Assert.DoesNotContain("1013", bounded);
+    }
+
+    [Fact]
     public void A_token_value_never_reaches_the_job_service_or_the_log()
     {
         var jobs = new FakeJobs();

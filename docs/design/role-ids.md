@@ -60,8 +60,19 @@ slipgates-fleet #1351: "Current lead only (Recommended)", "30 days / 20 uses (Re
 
 A succession grant is a person command (section 2's gates) that lets the role ledger accept successors for exactly one
 role, within limits, without a fresh person approval for each. Its signed body binds:
-`version, account, generation, roleId, grantId, grantVersion, modelClass, maxUses, notBefore, expiresAt, presentation
-(always separate), nonce, request, issuedAt`. `grantVersion` is strictly monotonic per role, as `assignmentVersion` is.
+`v, account, generation, roleId, grantId, grantVersion, modelClass, maxUses, notBefore, expiresAt, presentation
+(always separate), nonce, request, issuedAt, commandExpiresAt` (`v`, as every person command in devices.md, not `version`).
+`grantVersion` is strictly monotonic per role, as `assignmentVersion` is.
+
+**Two named clocks, never mixed.** `commandExpiresAt` is the COMMAND's clock: the last moment the relay may accept this signed
+command, at most 10 minutes after `issuedAt` (section 2's lifetime rule), spent once when the command commits. `expiresAt` is
+the GRANT's clock: the last moment a use may be admitted or activated, at most 30 days after `issuedAt`, with `notBefore` no
+earlier than `issuedAt`; the 30 days is measured from `issuedAt`. A command past `commandExpiresAt` is refused and creates
+nothing, however far off `expiresAt` is; a grant past `expiresAt` admits nothing, however fresh any later request is.
+
+The two actions are named `role.grant.create` (the body above) and `role.grant.revoke`, whose signed body is
+`v, account, generation, roleId, grantId, grantVersion, nonce, request, issuedAt, commandExpiresAt`. Both follow section 2's
+canonical bytes and replay rules; a third, `role.succession.abort`, is in S1.2a.
 The ledger keeps the grant and its consumed count; hosts and clients never hold either.
 
 ### S1.2 The checks (Quality's, exactly)
@@ -81,7 +92,7 @@ cannot activate; section 3's state then stays as it was). Any failure refuses an
 
 1. **Person-signed.** The grant, and its revocation, are signed by an ACTIVE enrolled person device in the pinned
    account and generation, neither probationary nor held, with recorded presence `key` or a verified `webauthn`, under
-   section 2's nonce, replay, lifetime (at most 10 minutes to commit the command), skew and persisted-floor rules.
+   section 2's nonce, replay, command lifetime (`commandExpiresAt`, S1.1), skew and persisted-floor rules.
    `capSign`, `hostSign`, an agent, the relay alone, a role's holder, or `presence: none` can neither create, extend,
    raise the count of, nor revoke one. A request from an agent or host may ask for a succession; it never creates a grant.
 2. **One role.** The grant names exactly one `roleId` (full UUIDv4, section 1). No list, wildcard, pattern, name or
@@ -95,7 +106,11 @@ cannot activate; section 3's state then stays as it was). Any failure refuses an
    re-reads all of these inside the activation commit, so a grant revoked while a succession is quiescing cannot activate
    it: the role stays `quiescing(E)` and needs section 3's fresh person assignment. No new state is introduced.
 5. **Bounded in time and count.** `expiresAt` AND `maxUses` are both required; a grant without both is refused when it
-   is signed. The ceiling is the owner's answer (S1.4): at most 30 days and 20 uses per grant. Time uses
+   is signed. The ceiling is the owner's answer (S1.4), "30 days / 20 uses (Recommended)", which the record gives with no unit.
+   **Per role, as recorded:** a role has at most ONE live grant (enforced, check 8), and it is at most 30 days and 20 uses for
+   that role: committing a grant with a higher `grantVersion` revokes the previous one in the same step, and what was left of its
+   count is forfeited. With one live grant per role, "per role" and "per grant" mean the same thing, so there is nothing to
+   ask. A new grant is a new person signature, never something an agent or a host can raise. Time uses
    `now = max(local wall clock, durable highWater)`. The consumed count is persisted in the ledger and checked, then
    incremented, in the admission step; a count at `maxUses`, or an `expiresAt` in the past at admission or at
    activation, refuses.
@@ -110,30 +125,77 @@ cannot activate; section 3's state then stays as it was). Any failure refuses an
    current-holder session and the successor's host add), **role**, **old session**, **new session**, **grant id** and
    **remaining uses**, plus time, both epochs, outcome and reason. It is tamper-evident: each record is signed by the role
    authority and carries the digest of the previous record for that role, so an edit, an omission or a reorder breaks the
-   chain, which readers and the person UI verify. It is visible to the owner: the person UI (slice 14) shows each record
-   with the grant's remaining uses and expiry, and refusals go through the existing audit and notification paths
-   (section 6). Counts and identifiers only; never a prompt, a workspace or a path.
+   chain, which readers and the person UI verify. The chain is signed by the same relay authority a compromised-authority attacker would
+   hold, and a chain alone cannot show a dropped tail. Tail protection: each record also carries a per-role sequence number, and
+   the admission and activation compare-and-swap carry the head digest and sequence they extend, so the ledger itself cannot
+   skip or fork the head. The head is ANCHORED outside the authority: two other holders keep a check: the person device remembers the latest
+   record digest it has seen per role and shows any shorter or different chain as a mismatch, and the successor's host
+   journals each activation it performs. The person device is the comparator: it checks each chain it is shown against the
+   host journals it can read and against its own remembered head. The chain's first record (genesis) is the role's mint record,
+   with sequence 1 and a zero previous digest, signed like any other, so a chain that starts elsewhere is a mismatch. Stated plainly, the audit is evidence against hosts and agents; against a compromised
+   authority it is evidence only as far as those two checks reach. It is visible to the owner: the person UI (slice 14) shows
+   each record with the grant's remaining uses and expiry. Each admitted attempt also notifies the owner through the existing
+   notification path, and refusals go through the existing audit and notification paths (section 6). A grant CANNOT be created
+   or used until slice 14's activation view has shipped: slice 7a's create action is gated off until then, so the owner's
+   condition ("visible audit") holds from the first use. Counts and identifiers only; never a prompt, a workspace or a path.
 8. **No fan-out.** One grant, one role, one successor per use, no sub-grants. A role's holder, a successor or an agent
-   cannot sign, copy, widen, extend or delegate a grant; one role has at most one pending succession at a time. The
+   cannot sign, copy, widen, extend or delegate a grant; one role has at most one pending succession at a time. A role has at
+   most ONE LIVE grant at a time, enforced in the ledger: creating a grant with a higher `grantVersion` revokes the previous one
+   in the same compare-and-swap, so two grants never coexist and the 30 days and 20 uses are the role's, as recorded. The
    grant authorizes no second role, no second holder, and no continuation of anything but the role it names.
-9. **Current holder only** (the owner's "Current lead only"). The appointment is requested by the role's CURRENT holder,
-   whose session is the one in the claim being replaced, and its successor is a session that holder itself launched, under
-   its own existing launch authorization; the successor's host binds the actual launched activation to that launch request,
-   as CHANGE C1-C2's `kind: launched` does. No other agent, host, earlier holder or person-less party can use the grant. An
-   `existingActivation` successor is not a grant use and needs a person-signed assignment (Q2).
+9. **Current holder only** (the owner's "Current lead only"). Two things are proved, by two named records.
+   (a) The REQUESTER is the current holder: the request is signed by the holder's session through its enrolled host (the host's
+   possession proof names the session id), and the ledger compares that session with the one in the claim being replaced.
+   (b) The SUCCESSOR is "a session the holder launched": the proving record is the holder's own host's journal entry of the
+   holder's launch request, a host-signed entry carrying `launchRequestId`, the LAUNCHER's session id (the holder) and the
+   launched session id and activation. Under a grant no person client exists, so C1-C2's person-signed commitment is not
+   available; the ledger instead requires that entry, checks its host signature against the enrolled host, checks that the
+   launcher equals the requester and the launched session equals the successor the successor's host proves, and binds the
+   `launchRequestId` into the grant use's `assignmentDigest`. A missing, unmatched, foreign (launcher is not the holder) or
+   unproven launch record REFUSES, consumes no use and is logged. No other agent, host, earlier holder or person-less party
+   can use the grant. An `existingActivation` successor is not a grant use and needs a person-signed assignment (Q2). Slice 7a
+   adds a "foreign launch" and a "missing launch record" vector.
 10. **Same model class.** The grant's `modelClass` and the class recorded for the old holder must be the same class, and
     the successor's class, which its enrolled host proves in its possession proof, must equal both; otherwise it is
-    refused and consumes no use. A successor of another class is a new person-signed assignment, not a grant use. The
+    refused and consumes no use. The old holder's class is the one recorded in the ledger at its activation, from its own host
+    proof; the proof tuple therefore carries `modelClass` (an additive field). A successor of another class is a new person-signed assignment, not a grant use. The
     class names follow the fleet's model policy; this note lists none.
 11. **Inherits nothing.** The successor inherits NOTHING beyond the role's own permissions: not the predecessor's launch
     or stop grants, pending-launch rights, delegations, tokens, session-scoped approvals, workspace or presentation
     (`separate` only), and not this grant: the remaining uses belong to the role's ledger, never to a session. Its
     permissions are exactly what the role carries and what any new session of the role receives from existing authorizations.
 
+### S1.2a Aborting a stuck succession
+
+A role can sit in `quiescing(E)` with no way forward: the stop is never confirmed, the grant is revoked or lapses while it
+drains, or the old host has failed. Section 3's rule is unchanged (an unknown outcome blocks activation, with no timeout), so
+the only way out is an explicit ABORT.
+- **Who.** Only a person-signed `role.succession.abort` (section 2's gates, presence `key` or `webauthn`; body: `v, account,
+  generation, roleId, epoch E, successor session, nonce, request, issuedAt, commandExpiresAt`). The holder, the successor, a
+  host, an agent or the relay alone cannot abort, so a holder cannot reopen a role that has drained.
+- **Result.** The ledger reads the old host's persisted fence in the same compare-and-swap. If it shows the old holder NOT
+  stopped, the role returns to `active(E)` with the old holder keeping it, old-epoch admission reopens, the old host clears its persisted quiesce fence for epoch E in the same step (it refuses
+  to type for the role until the ledger's `active(E)` reaches it), and the pending
+  successor and its request are refused for good. If it shows the old holder stopped, or nothing (an unknown outcome never
+  counts as stopped), the role moves to `revoked(E+1)` and needs section 3's fresh person assignment; it never returns to
+  `active(E)`.
+- **Use.** The attempt keeps its use: it is not refunded, and the owner's view says so, so a stuck role has spent one of the 20.
+- **Who stops the old holder.** The old host stops its own holder when the ledger shows `quiescing(E)`, as section 3's fence
+  requires, under the host's own stop duty. The grant authorizes no stop (check 6); if the host does not stop it, the role stays
+  `quiescing(E)` until an abort.
+- **Audit.** The abort writes an activation record before it takes effect, in the same chain: the signing person device, role,
+  epoch, pending successor, the fence state read, the resulting state, remaining uses, time and reason.
+
 ### S1.3 What this changes in the text above
 
 - **Q1 and Q2** (Decisions) are rewritten there; section 3's "The owner approves each exact successor" is marked in place:
   a valid grant stands in for that approval, and only for it.
+- **Section 3's losers and Section 5.** "losers must obtain new owner approval" is marked in place: under a grant a loser is
+  refused and consumes no use (check 3). **Design proposal (not an owner decision; Quality's proposal until the owner confirms):** a
+  grant never covers host move, host recovery, an approved resume or an `existingActivation` resume, so those stay person-approved,
+  and section 5's "owner-approved successor procedure" and "owner-approved rebind" keep meaning a person signature. It follows from
+  the owner's "Current lead only" (a dead or absent holder cannot be the requester, check 9), but no owner answer says it in words.
+  The 30 days and 20 uses are per role, as recorded, and a role has one live grant (check 8), so two grants cannot add up to 40.
 - **Continuity** (CHANGE C1-C2): a grant carries `presentation: separate` only. A succession that inherits presentation
   still needs the per-succession person approval C1-C2 describes, because the person must see the effect first.
 - **Slices 7 and 14** (the table) are edited in place; a new **slice 7a** holds the grant's ledger, signing and activation
@@ -142,9 +204,12 @@ cannot activate; section 3's state then stays as it was). Any failure refuses an
 ### S1.4 The owner's answers (Nov 23, 23:45 PT, recorded in slipgates-fleet #1351)
 
 1. **Who may use it:** "Current lead only (Recommended)": check 9.
-2. **The limits:** "30 days / 20 uses (Recommended)": at most 30 days and at most 20 uses per grant (check 5).
+2. **The limits:** "30 days / 20 uses (Recommended)": at most 30 days and at most 20 uses PER ROLE, as the decision record has it; a role has at most one live grant at a time (checks 5 and 8), so the limits are the role's.
 3. **The residual risk:** "Accept, with visible audit (Recommended)": accepted on the condition of check 7.
 4. **Defaults that stand:** a grant never carries `presentation: inherit`; no drain starts before the grant check.
+
+Only the three quoted answers above are the owner's. Everything else in this CHANGE (how one live grant per role is enforced, the abort path, the
+launch record, the two clocks, section 5's person-approved paths) is a **design proposal (not an owner decision)** until the owner approves it.
 
 ### S1.5 Interaction with the person enrollment (slice 2) and the published claim
 
@@ -268,12 +333,13 @@ without online fencing: respectively they lack provenance, ownership or currentn
 
 Require per-role linearizable transactions shared by all authority replicas:
 `active(epoch E) -> quiescing(E) -> active(E+1)` or `revoked(E+1)`.
-The owner approves each exact successor; agents may request, never authorize, transfer.
+The owner approves each exact successor; agents may request, never authorize, transfer (under a grant only the CURRENT holder may request, S1.2 check 9).
 **[CHANGE S1, owner answered Nov 23, 23:45 PT: a valid standing grant for this role (S1.2) stands in for that per-successor approval, and only for it.]**
 Compare-and-swap includes account/generation, role, old epoch, expected old session
 and assignment version; atomically persist the higher version and consumed request/nonce
 with the assignment. Restart, key rotation and roster changes never reset role versions.
-Two successor requests cannot both commit; losers must obtain new owner approval.
+Two successor requests cannot both commit; a loser is refused. Without a grant it needs a new person-signed approval; under a
+grant (CHANGE S1, S1.2 check 3) it needs nothing new, is not admitted and consumes no use.
 Quiescing first closes old-epoch admission, cancels unissued sends and drains every
 issued delivery reservation to authenticated `delivered` or `notDelivered`.
 The old host persists its fence and confirms the old holder stopped, not just quiesced. Only then may the
@@ -330,11 +396,11 @@ tombstones and unresolved reservations before serving sends; absent durable stat
 or loss of quorum refuses all role operations.
 
 Resume or host move uses a new SESSION GUID, the same ROLE GUID, and the same atomic
-owner-approved successor procedure; copied workspace labels confer no ownership.
+owner-approved successor procedure **[CHANGE S1, design proposal (not an owner decision): stays a person signature and is never a grant use, S1.3]**; copied workspace labels confer no ownership.
 Revoke a compromised host add, its claims and outstanding unissued permits; block
 delivery on every check and retain unresolved issued permits until proven terminal.
 Approved host recovery retains an uncompromised role only after owner-approved
-rebind, fresh enrolled-host proof and confirmed old-holder stop. A compromised role
+rebind **[CHANGE S1, design proposal (not an owner decision): a person signature, never a grant use, S1.3]**, fresh enrolled-host proof and confirmed old-holder stop. A compromised role
 is retired permanently; authority compromise suspends routing and requires person-approved
 authority re-enrollment and affected-role retirement. Mint replacement ROLE GUIDs, never reset epochs or resurrect tombstones.
 Authority re-enrollment, key rotation and person-approved revocation/retirement use
@@ -454,15 +520,15 @@ Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 1
 | 4 | Bridge | Signed session GUID publication/reading, 220 | 3, existing hostSign chain | Yes | Verify legacy locator mapping and enrolled host proof; never truncate GUIDs |
 | 5 | Bridge | Durable role ledger/CAS, 220 | 2 | Yes | Mint/tombstone/recovery, concurrent assignment and quorum-loss refusal |
 | 6 | Bridge | Claim signing/publisher/verifier, 220 | 4-5 | Yes | Reject unsigned/self-appointed claims, wrong assignment/host proof, stale and conflicting claims |
-| 7 | Bridge | Durable stop/reservation core, 240 | 5-6 | Yes | Drain/crash/lost acknowledgement: require a valid standing succession grant (CHANGE S1) or, for a succession that is not a grant use, per-successor owner approval, and confirmed stop; unknown-outcome blocks takeover; the use is consumed when the attempt is admitted, never refunded, and a refused request consumes none |
-| 7a (CHANGE S1) | Bridge | Standing succession grant: types/vectors, person-signed create/revoke, ledger count, signed hash-chained activation records, 200 | 2, 5, 7 | Yes | Each S1.2 check refuses on its own: unsigned or agent/host/capSign signer, two roles or a wildcard, a non-holder requester, another model class, a second use of one use, a revoked, expired or exhausted grant, a grant with no time or count, an unconfirmed stop, a failed record write, a sub-grant or a grant by a successor; a refused request consumes no use and an admitted one consumes one; a successor inherits nothing; an edited, dropped or reordered activation record breaks the chain |
+| 7 | Bridge | Durable stop/reservation core, 240 | 5-6 | Yes | Drain/crash/lost acknowledgement: require per-successor owner approval and confirmed stop (the grant path is slice 7a's, which depends on this slice, so nothing here needs a grant); unknown-outcome blocks takeover |
+| 7a (CHANGE S1) | Bridge | Standing succession grant: types/vectors, person-signed create/revoke, ledger count, signed hash-chained activation records, 200 | 2, 5, 7 | Yes | Each S1.2 check refuses on its own: unsigned or agent/host/capSign signer, two roles or a wildcard, a non-holder requester, another model class, a second use of one use, a revoked, expired or exhausted grant, a grant with no time or count, an unconfirmed stop, a failed record write, a sub-grant or a grant by a successor; a refused request consumes no use and an admitted one consumes one, never refunded; a foreign or missing launch record; the abort paths (S1.2a); create gated off until slice 14 ships; one active grant per role (design proposal); a successor inherits nothing; an edited, dropped or reordered activation record breaks the chain |
 | 8 | Bridge | Fenced-send host/protocol integration, 240 | 7 | Yes | Injection interleavings, delayed old send, dedupe; no legacy downgrade |
 | 9 | Bridge | `fleet.find`, role projection and MCP, 220 | 6,8 | Yes | Typed unique holder, refusal parity, scoped proof and no name echo |
 | 10 | Fleet | Messenger, `find-nodes`, `reply-session`, 240 | 8-9 | Yes | Explicit role/session selectors; A/B name-transfer regression and stale-binding refusal |
 | 11 | Fleet | Dispatcher roster/planner/send adapter, 220 | 10 | Yes | Replace name regex/Target-name routing with verified IDs; preserve existing pins/caps and reject stale assignments |
 | 12 | Bridge | PWA verified role display/resolver, 220 | 6,9 | Yes | Copy separate GUIDs, plain-text labels, stale/revoked UI; no implicit assignment authority |
 | 13 | Bridge | PWA role-send binding, 220 | 8,12 | Yes | Session reply/answer drafts stay pinned; changed holder requires new action; uncertain request never retargets |
-| 14 | Bridge | Person assignment/recovery approval UI, 240 | 2,7-8 and 7a | Yes | Per-successor owner approval, or under S1 a person-signed standing grant create/revoke view with its remaining uses and expiry and the visible activation records, and confirmed stop; resume/move/host recovery preserves ROLE, renews SESSION; compromised ROLE stays retired |
+| 14 | Bridge | Person assignment/recovery approval UI, 240 | 2,7-8 and 7a | Yes | Per-successor owner approval, or under S1 a person-signed standing grant create/revoke view with its remaining uses and expiry and the visible activation records, and confirmed stop; it also ENABLES a grant: slice 7a's create and use stay gated off until this slice ships, so no grant can be used before its audit is visible; resume/move/host recovery preserves ROLE, renews SESSION; compromised ROLE stays retired |
 | 15 | Fleet | Explicit name-to-ID configuration migration, 220 | 10-14 | Yes | Person-enrolled mappings only; rename leaves GUIDs/epoch unchanged; legacy names display-only, rollback cannot restore name-send fallback |
 
 ### Slice 1 wire format (additive; fills gaps, changes nothing above)

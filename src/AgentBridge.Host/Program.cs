@@ -567,11 +567,14 @@ async Task<int> ServeAsync(HostHandover handover)
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
     // all when push.enabled is off (the shadow host beside agent-ha-bridge, which already notifies
     // the phones): no subscription is taken and nothing is sent.
+    var agentAudit = new AgentAuditLog(identity.Folder, log: Log) { DeviceKey = identity.Key };
+    await using var phoneNotices = new PhoneNoticeRecorder(agentAudit, Log);
     await using var push = settings.Push
         ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log, trust: trustedPeers)
         : null;
     if (push is not null)
     {
+        push.NoticeOutcome += phoneNotices.Record;
         trustedPeers.Changed += push.RevalidateTrust;
         push.RevalidateTrust();
     }
@@ -639,7 +642,6 @@ async Task<int> ServeAsync(HostHandover handover)
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive, jobs: new WindowsSessionJobs()) : null;
     // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
-    var agentAudit = new AgentAuditLog(identity.Folder, log: Log) { DeviceKey = identity.Key };
     // Bound to the readiness scan once that exists: a launch asks the cached scan and never reads an agent's files.
     Func<string, bool> hooksNotSetUp = static _ => false;
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit, id => hooksNotSetUp(id));
@@ -651,7 +653,7 @@ async Task<int> ServeAsync(HostHandover handover)
     launcher.StartScanning();
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
-    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), () => liteKill.On, () => identity.Account?.AccountId, launcher, identity.Folder, identity.Key, Log, drivers);
+    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), () => liteKill.On, () => identity.Account?.AccountId, launcher, identity.Folder, identity.Key, Log, drivers, deliveryGate);
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -1004,13 +1006,19 @@ async Task<int> ServeAsync(HostHandover handover)
     AgentPipeLaunch? grantPipe = null;
     FleetStopCommands? fleetStop = null;
     FleetResumeCommands? fleetResume = null;
+    AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null;
     if (agentCredentials is { } grantCredentials)
     {
+        // Gated like AgentLiteSender: ILiteMode.On (the agentMessaging.remote setting and any lite kill) before and after signing, and the source host audits its own refusals.
+        remoteLaunch = new AgentBridge.Host.Lite.FleetRemoteLaunchSender(liteLink, grantCredentials, liteKill,
+            AgentBridge.Host.Lite.AgentLiteSender.HostSigner(identity.Folder, liteKill), audit: agentAudit);
         var (grantRequests, grantRequestsProblem) = homeAssistant is { } ha ? (ha.LaunchRequests, ha.LaunchRequestsProblem)
             : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(identity.Folder, TimeProvider.System);
         grantPipe = new AgentPipeLaunch(identity.Folder, grantCredentials, service, agentAudit, grantRequests, grantRequestsProblem,
             fleetGrants: new FleetGrantLaunch(identity.Folder, identity.Key, () => identity.Account?.AccountId,
                 Wire.DeviceId(identity.Key.Public), grantCredentials, launcher));
+        // Serve fleet.launch from another host of this account: ONE receiver per host (shared replay cache and warm-up), gated by the same lite kill.
+        FleetRemoteLaunch.Wire(service, grantPipe, new AgentBridge.Host.Fleet.Grants.GrantStore(identity.Folder, identity.Key, new(identity.Folder), new([], [], [], [], [], [], [], [])), liteKill);
         if (homeAssistant is not null && !ReferenceEquals(grantPipe.Requests, homeAssistant.LaunchRequests))
         { throw new InvalidOperationException("HA and grant launches must share one request-store writer."); }
         launcher.RequestRegistered += (id, session) => grantPipe.Registered(id, session);
@@ -1024,7 +1032,7 @@ async Task<int> ServeAsync(HostHandover handover)
         fleetResume = new FleetResumeCommands(identity.Folder, grantCredentials, launcher.LaunchRole, launcher.WasFleetLaunched,
             id => source.Get(id) is not null, restore.RecordedLaunch, (ask, ct) => launcher.ResumeFleetAsync(ask, ct), fleetNames.Get);
     }
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, fleetResume: fleetResume), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, fleetResume: fleetResume, remoteLaunch: remoteLaunch), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
