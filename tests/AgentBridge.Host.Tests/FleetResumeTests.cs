@@ -116,11 +116,12 @@ public sealed class FleetResumeTests : IDisposable
     [Fact]
     public async Task A_busy_refusal_is_not_remembered_for_the_same_request_id()
     {
-        var request = Guid.NewGuid();
+        var handler = Open();   // one handler: the memory of answers is its own
+        var data = JsonSerializer.SerializeToElement(new { version = 1, request = Guid.NewGuid(), session = target });
         outcome = new(LaunchOutcome.Busy, "busy");
-        Assert.Equal("busy", (await Resume(request: request)).Reason);
+        Assert.Equal("busy", (await handler.HandleAsync(caller, data)).Reason);
         outcome = new(LaunchOutcome.Started, null);
-        Assert.Equal("resumed", (await Resume(request: request)).Outcome);
+        Assert.Equal("resumed", (await handler.HandleAsync(caller, data)).Outcome);
         Assert.Equal(2, resumed.Count);
     }
     [Fact]
