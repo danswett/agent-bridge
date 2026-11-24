@@ -12,8 +12,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const contract = JSON.parse(readFileSync(path.join(here, 'cases.json'), 'utf8'));
-const command = process.env.SLIPGATES_MCP_COMMAND ? JSON.parse(process.env.SLIPGATES_MCP_COMMAND) : [process.execPath, realpathSync.native(path.join(here, '..', '..', 'src', 'server.mjs'))]  // real-cased path: the server starts only when import.meta.url equals argv[1];
+const contract = JSON.parse(readFileSync(path.join(here, 'contract', 'cases.json'), 'utf8'));
+const command = process.env.SLIPGATES_MCP_COMMAND ? JSON.parse(process.env.SLIPGATES_MCP_COMMAND) : [process.execPath, realpathSync.native(path.join(here, '..', 'src', 'server.mjs'))]  // real-cased path: the server starts only when import.meta.url equals argv[1];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Ids named in the file ("$s", "$r") are replaced before use, in arguments and expectations alike.
