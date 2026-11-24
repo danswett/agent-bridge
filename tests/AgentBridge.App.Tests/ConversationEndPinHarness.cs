@@ -63,17 +63,26 @@ namespace Microsoft.UI.Dispatching
         readonly Queue<Action> pending = [];
         public bool TryEnqueue(Action action) { pending.Enqueue(action); return true; }
         public bool TryEnqueue(DispatcherQueuePriority priority, Action action) => TryEnqueue(action);
-        public DispatcherQueueTimer CreateTimer() => new();
+        public List<DispatcherQueueTimer> Timers { get; } = [];
+        public DispatcherQueueTimer CreateTimer() { var timer = new DispatcherQueueTimer(); Timers.Add(timer); return timer; }
         public void Drain() { while (pending.TryDequeue(out var action)) { action(); } }
     }
 
     public sealed class DispatcherQueueTimer
     {
         public TimeSpan Interval { get; set; }
+        public bool IsRepeating { get; set; } = true;
         public bool IsRunning { get; private set; }
-        public event EventHandler<object> Tick { add { } remove { } }
+        public event EventHandler<object>? Tick;
         public void Start() => IsRunning = true;
         public void Stop() => IsRunning = false;
+        // Elapses once, as the dispatcher would after Interval: a one-shot timer stops first.
+        public void Elapse()
+        {
+            if (!IsRunning) { return; }
+            if (!IsRepeating) { IsRunning = false; }
+            Tick?.Invoke(this, new());
+        }
     }
 }
 
@@ -214,6 +223,8 @@ namespace AgentBridge.App
         public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; }
         public void LaidOutForProbe() => KeepAnchoredBlock();
         public void DrainForProbe() => DispatcherQueue.Drain();
+        public Microsoft.UI.Dispatching.DispatcherQueueTimer DispatcherTimersForProbe => DispatcherQueue.Timers[^1];
+        public void LapseWheelForProbe() { foreach (var timer in DispatcherQueue.Timers.Where(t => t.Interval == WheelStart).ToList()) { timer.Elapse(); } }
         public void KeepPlaceForProbe() => KeepPlace(false, Scroller.VerticalOffset);
         public void ReplyForProbe() => KeepPlace(HistoryAtEnd(), Scroller.VerticalOffset);
         public void GestureForProbe(string gesture)

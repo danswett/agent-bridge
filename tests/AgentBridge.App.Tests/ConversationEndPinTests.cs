@@ -820,6 +820,28 @@ public sealed class ConversationEndPinTests
         Assert.Equal([view.Scroller.VerticalOffset + 112], view.Scroller.Targets);
     }
 
+    // A wheel that cannot move the view (already at an edge) raises no view change: its hold lapses by itself,
+    // and only the latest notch's lapse lets go.
+    [Fact]
+    public void A_wheel_with_no_view_change_lets_go_after_its_start_window()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.Scroller.Wheel();
+        Assert.False(view.HistoryEnd);
+        view.TakeAnchorForProbe(-72);
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        var first = view.DispatcherTimersForProbe;
+        view.Scroller.Wheel();
+        first.Elapse();
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        // Still at the end once it lapses: the next reply re-engages the pin there.
+        view.LapseWheelForProbe();
+        Assert.True(view.HistoryEnd, view.PinState());
+    }
+
     [Fact]
     public void Follow_does_not_correct_the_end_while_the_person_is_scrolling()
     {
