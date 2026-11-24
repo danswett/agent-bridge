@@ -138,59 +138,7 @@ public sealed partial class CiRunnerResolutionTests
         var map = RunnersMap().Match(plan);
         Assert.True(map.Success, "plan.ps1 has no $runners = [ordered]@{ ... } map");
         Assert.Equal(allowlist, MapValue().Matches(map.Groups[1].Value).Select(m => m.Groups[1].Value));
-        // Every value product-os takes comes out of that map: no literal runner anywhere it is written, and the output
-        // is exactly the variable (B421 P2-2).
-        Assert.Empty(RunnerRouting.ProductOsProblems(plan));
-    }
-
-    // R8b P2 (#4104), before routing widens: the pin is structural and lives in RunnerRouting. Each shape below, put into
-    // the real plan.ps1, writes product-os or the map some way a line regex missed; each must be caught.
-    const string AfterWrites = "if ($productOs.Count -eq 0 -and $productIds.Count -gt 0)";
-    const string AfterOutput = "$outputs['product-os'] = ConvertTo-JsonArray $productOs";
-
-    [Theory]
-    [InlineData(AfterWrites, "$productOs += 'ab-ci'")]
-    [InlineData(AfterWrites, "$productOs.Add('ab-ci')")]
-    [InlineData(AfterWrites, "$productOs[0] = 'ab-ci'")]
-    [InlineData(AfterWrites, "$PRODUCTOS = @('ab-ci')")]
-    [InlineData(AfterWrites, "${productOs} = @('ab-ci')")]
-    [InlineData(AfterWrites, "$script:productOs = @('ab-ci')")]
-    [InlineData(AfterWrites, "$null = \"$($productOs = @(\"ab-ci\"))\"")]
-    [InlineData(AfterWrites, "Set-Variable -Name ('product' + 'Os') -Value @('ab-ci')")]
-    [InlineData(AfterWrites, "(Get-Variable productOs).Value = @('ab-ci')")]
-    [InlineData(AfterWrites, "Invoke-Expression ('$product' + 'Os = 1')")]
-    [InlineData(AfterWrites, "$runners['win-x64'] = 'ab-ci'")]
-    [InlineData(AfterWrites, "$runners.Add('x', 'ab-ci')")]
-    [InlineData(AfterOutput, "$outputs[\"product-os\"] = '[\"ab-ci\"]'")]
-    [InlineData(AfterOutput, "$outputs['Product-OS'] = '[\"ab-ci\"]'")]
-    [InlineData(AfterOutput, "$outputs.'product-os' = '[]'")]
-    [InlineData(AfterOutput, "$outputs[('product' + '-os')] = '[]'")]
-    [InlineData(AfterOutput, "$outputs.Remove('product-os')")]
-    public void A_product_os_write_in_any_shape_is_caught(string after, string shape)
-    {
-        var plan = Plan();
-        Assert.Empty(RunnerRouting.ProductOsProblems(plan));
-        var line = plan.Split('\n').Single(l => l.Contains(after, StringComparison.Ordinal));
-        Assert.NotEmpty(RunnerRouting.ProductOsProblems(plan.Replace(line, line + "\n" + shape, StringComparison.Ordinal)));
-    }
-
-    [Theory]
-    [InlineData("ForEach-Object { $runners[$_] })\n#", "ForEach-Object { $runners[$_]; 'ab-ci' })\n#")]
-    [InlineData("Where-Object { -not $platform", "Where-Object { $($productOs = 'ab-ci') -or -not $platform")]
-    [InlineData("'win-arm64' = 'windows-11-arm'", "'win-arm64' = 'ab-ci'")]
-    [InlineData("$outputs['product-os'] = ConvertTo-JsonArray $productOs", "$outputs['product-os'] = '[\"ab-ci\"]'")]
-    public void A_changed_write_map_or_output_is_caught(string from, string to)
-    {
-        var plan = Plan();
-        Assert.Contains(from, plan.Replace("\r\n", "\n"), StringComparison.Ordinal);
-        Assert.NotEmpty(RunnerRouting.ProductOsProblems(plan.Replace("\r\n", "\n").Replace(from, to, StringComparison.Ordinal)));
-    }
-
-    static string Plan()
-    {
-        var root = AppContext.BaseDirectory;
-        while (!File.Exists(Path.Combine(root, "AgentBridge.slnx"))) { root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("No AgentBridge.slnx above the test's output."); }
-        return File.ReadAllText(Path.Combine(root, "quality", "plan.ps1"));
+        // Every write of product-os is pinned by ProductOsPinTests (the parser, not the text).
     }
 
     // R8b P2: include in any other spelling, or a YAML merge key (<<) in a job, its matrix or a row, can carry an ab-ci row

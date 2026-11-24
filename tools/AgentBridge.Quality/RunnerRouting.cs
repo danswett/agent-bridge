@@ -264,67 +264,30 @@ static partial class RunnerRouting
         return all;
     }
 
-    // plan.ps1's product-os pin (R8b P2, #4104), here so the lint owns it: every value ci.yml product's named key takes
-    // comes from $runners, whose values are ProductRunners, all hosted. Structural, not a write regex: every mention of
-    // productOs, product-os, $runners or $outputs, in any case, scope or ${...} spelling and wherever it sits (a string's
-    // subexpression too), must be one of the known shapes below, and nothing may write a variable by name. So a write
-    // by +=, .Add(), an indexer, another key spelling or a computed key is something the pin doesn't know, and fails.
-    internal static List<string> ProductOsProblems(string plan)
+    // plan.ps1's product-os pin (R8b on #4306): quality/product-os-pin.ps1 reads plan.ps1 with the PowerShell parser and
+    // allow-lists the one safe write of product-os, refusing every other write to $outputs, $productOs, $runners or the
+    // output file (computed keys, method writes, splatting, writes by name). Here, the map values it found are held to
+    // ProductRunners, every one a known hosted label.
+    internal static List<string> ProductOsProblems(string repoRoot, string plan)
     {
-        var problems = new List<string>();
-        var counts = new Dictionary<string, int> { ["write"] = 0, ["map"] = 0, ["output"] = 0 };
-        foreach (var (n, line) in PlanCode(plan))
+        var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(repoRoot, "quality", "product-os-pin.ps1"), "-Plan", plan }) { start.ArgumentList.Add(arg); }
+        using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
+        var error = process.StandardError.ReadToEndAsync();
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0) { return [$"quality/product-os-pin.ps1 failed (exit {process.ExitCode}): {error.Result.Trim()}"]; }
+        try
         {
-            if (DynamicVariable().Match(line) is { Success: true } dynamic) { problems.Add($"plan.ps1:{n} {dynamic.Value} can write a variable by name"); }
-            var rest = line;
-            if (ProductOsOutputLine().IsMatch(rest)) { counts["output"]++; rest = ""; }
-            if (RunnersMapLine().Match(rest) is { Success: true } map)
-            {
-                counts["map"]++;
-                var values = MapValue().Matches(map.Groups[1].Value).Select(m => m.Groups[1].Value).ToList();
-                if (!values.SequenceEqual(ProductRunners) || !values.All(v => Hosted().IsMatch(v))) { problems.Add($"plan.ps1:{n} $runners isn't [{string.Join(", ", ProductRunners)}]"); }
-                rest = "";
-            }
-            counts["write"] += ProductOsWrite().Matches(rest).Count;
-            rest = KnownUse().Replace(ProductOsWrite().Replace(rest, ""), "");
-            if (Watched().Match(rest) is { Success: true } other) { problems.Add($"plan.ps1:{n} uses {other.Value} in a shape the product-os pin doesn't know: {line.Trim()}"); }
+            using var doc = JsonDocument.Parse(output);
+            static List<string> Strings(JsonElement e) => e.ValueKind == JsonValueKind.Array ? [.. e.EnumerateArray().Select(x => x.GetString() ?? "")] : e.ValueKind == JsonValueKind.String ? [e.GetString()!] : [];
+            var problems = Strings(doc.RootElement.GetProperty("problems"));
+            var runners = Strings(doc.RootElement.GetProperty("runners"));
+            if (!runners.SequenceEqual(ProductRunners) || !runners.All(r => Hosted().IsMatch(r))) { problems.Add($"plan.ps1's $runners map is [{string.Join(", ", runners)}], not [{string.Join(", ", ProductRunners)}]"); }
+            return problems;
         }
-        if (counts["write"] == 0) { problems.Add("plan.ps1 never writes $productOs from $runners"); }
-        if (counts["map"] != 1) { problems.Add($"plan.ps1 defines $runners {counts["map"]} time(s), not once"); }
-        if (counts["output"] != 1) { problems.Add($"plan.ps1 writes $outputs['product-os'] = ConvertTo-JsonArray $productOs {counts["output"]} time(s), not once"); }
-        return problems;
+        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { return [$"quality/product-os-pin.ps1 wrote no readable result: {e.Message}"]; }
     }
-
-    // plan.ps1's lines without its leading <# #> help and its whole-line comments, numbered as in the file.
-    static IEnumerable<(int Line, string Text)> PlanCode(string plan)
-    {
-        var lines = plan.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var help = false;
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var trimmed = lines[i].Trim();
-            if (i < 3 && trimmed == "<#") { help = true; }
-            if (help) { help = trimmed != "#>"; continue; }
-            if (!trimmed.StartsWith('#')) { yield return (i + 1, lines[i]); }
-        }
-    }
-
-    [GeneratedRegex(@"(?i)\b(Set|New|Get|Clear|Remove)-Variable\b|\b(sv|nv|gv|clv|rv)\b|variable:|Invoke-Expression|\biex\b|ScriptBlock|ExecutionContext|SessionState|PSVariable|\[ref\]|Invoke-Command|\bicm\b")]
-    private static partial Regex DynamicVariable();
-    [GeneratedRegex(@"^\s*\$outputs\['product-os'\] = ConvertTo-JsonArray \$productOs\s*$")]
-    private static partial Regex ProductOsOutputLine();
-    [GeneratedRegex(@"^\s*\$runners = \[ordered\]@\{([^}]*)\}\s*$")]
-    private static partial Regex RunnersMapLine();
-    [GeneratedRegex(@"=\s*'([^']*)'")]
-    private static partial Regex MapValue();
-    // The one write: the map's values, filtered by the plan's own selection variables only (no string, no subexpression).
-    [GeneratedRegex(@"\$productOs = @\(\$runners\.Keys \| Where-Object \{ (?:[^{}'""`;=$]|\$(?:whole|platforms|platform|ExcludePlatform|_)\b)* \} \| ForEach-Object \{ \$runners\[\$_\] \}\)")]
-    private static partial Regex ProductOsWrite();
-    // The known reads, and $outputs' other writes by a lower-case literal key other than product-os, or by $job.
-    [GeneratedRegex(@"\$productOs\.Count\b|@\(\$productOs\) -join|\$outputs = \[ordered\]@\{\}|\$outputs\[\$job\]|\$outputs\['(?!product-os')[a-z][a-z-]*'\]|\$outputs\.GetEnumerator\(\)")]
-    private static partial Regex KnownUse();
-    [GeneratedRegex(@"(?i)product-?os|\$\{?(?:\w+:)?(?:runners|outputs)\b")]
-    private static partial Regex Watched();
 
     // The declared type of a workflow_dispatch input, or null when there is no such input or type.
     static string? DispatchInputType(YamlMappingNode root, string input)
