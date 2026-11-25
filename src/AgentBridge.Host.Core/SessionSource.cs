@@ -68,6 +68,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // writing the file with no process after the launch has stopped being followed, so the binding
     // is kept for as long as that process (pid and start) runs. Only on the pass, under _pass.
     readonly Dictionary<string, (int Pid, DateTimeOffset? Started)> _pidlessBound = new(StringComparer.Ordinal);
+    // Why each launch still being followed has bound no registration, by launch and reason, so each is said once.
+    readonly HashSet<(int Pid, DateTimeOffset? Started, string Reason)> _launchUnbound = [];
 
     // The Codex launches this host is still following, which a Codex registration that names no
     // process may be the session of (#3644). Null where nothing launches (a read-only command).
@@ -770,30 +772,60 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
 
         var launches = PendingCodexLaunches?.Invoke() ?? [];
+        _launchUnbound.RemoveWhere(k => !launches.Any(l => l.ProcessId == k.Pid && l.StartedAt == k.Started));
         var fits = new List<(Registration R, PendingCodexLaunch L, AgentProcess P)>();
         foreach (var l in launches)
         {
-            if (l.StartedAt is not { } launchStart || string.IsNullOrWhiteSpace(l.Folder)
-                || !running.TryGetValue(l.ProcessId, out var process) || process.StartedAt is not { } processStart
-                || (processStart - launchStart).Duration() > TimeSpan.FromSeconds(2)
-                || accounted.Contains(process.Id) || taken.Contains(process.Id)
-                || (!string.IsNullOrEmpty(process.CommandLine) && !CodexLockDiscovery.IsTerminal(process.CommandLine))) { continue; }
+            if (UnboundLaunch(l, running, accounted, taken) is { } why) { Unbound(l, why); continue; }
+            var process = running[l.ProcessId];
+            var launchStart = l.StartedAt!.Value;
+            // The reason of the registration that came closest to fitting: each check below is a step further.
+            string? closest = null;
+            var fitted = false;
             foreach (var r in unbound)
             {
-                if (Written(r) is not { } at || at < launchStart - TimeSpan.FromSeconds(1) || !SameFolder(l.Folder, r.WorkingDirectory)) { continue; }
+                if (Written(r) is not { } at || at < launchStart - TimeSpan.FromSeconds(1)) { closest ??= $"registration {r.SessionId} was not written after the launch started"; continue; }
+                if (!SameFolder(l.Folder, r.WorkingDirectory)) { closest = $"registration {r.SessionId} is for folder '{r.WorkingDirectory}', not '{l.Folder}'"; continue; }
                 // Nothing authenticates the registration, so the launch's process must be the only Codex that could have written it.
-                if (observed.Processes.Any(o => o.Id != process.Id && CouldHaveWritten(observed, accounted, o, at))) { continue; }
+                if (observed.Processes.FirstOrDefault(o => o.Id != process.Id && ExcludedWriter(observed, accounted, o, at) is null) is { } rival)
+                {
+                    closest = $"codex process {rival.Id} could also have written registration {r.SessionId}";
+                    continue;
+                }
                 fits.Add((r, l, process));
+                fitted = true;
             }
+            if (!fitted && closest is not null) { Unbound(l, closest); }
         }
         foreach (var (r, l, process) in fits)
         {
-            if (fits.Count(x => x.R.SessionId == r.SessionId) != 1 || fits.Count(x => x.L.ProcessId == l.ProcessId) != 1) { continue; }
+            if (fits.Count(x => x.R.SessionId == r.SessionId) != 1 || fits.Count(x => x.L.ProcessId == l.ProcessId) != 1)
+            {
+                Unbound(l, $"registration {r.SessionId} fits more than one launch, or the launch more than one registration");
+                continue;
+            }
             _pidlessBound[r.SessionId] = (process.Id, process.StartedAt);
             Log($"codex registration {r.SessionId} names no process: bound to codex process {process.Id}, which this host launched in {l.Folder}");
             Bind(r, process);
         }
         return bound;
+    }
+
+    // Why a launch cannot be bound whatever registration is waiting: the first of what it needs that it lacks.
+    static string? UnboundLaunch(PendingCodexLaunch l, Dictionary<int, AgentProcess> running, HashSet<int> accounted, HashSet<int> taken)
+    {
+        if (l.StartedAt is not { } launchStart || string.IsNullOrWhiteSpace(l.Folder)) { return "the launch records no start time or folder"; }
+        if (!running.TryGetValue(l.ProcessId, out var process)) { return "it is not among the running codex processes (exited, or its image is not one the host lists)"; }
+        if (process.StartedAt is not { } processStart) { return "its process start time cannot be read"; }
+        if ((processStart - launchStart).Duration() > TimeSpan.FromSeconds(2)) { return $"the process started {(processStart - launchStart).TotalSeconds:0.#} s from the launch, over the 2 s allowed (another process has its pid)"; }
+        if (accounted.Contains(process.Id) || taken.Contains(process.Id)) { return "another session already accounts for its process"; }
+        if (!string.IsNullOrEmpty(process.CommandLine) && !CodexLockDiscovery.IsTerminal(process.CommandLine)) { return "its command line is not an interactive terminal's"; }
+        return null;
+    }
+
+    void Unbound(PendingCodexLaunch l, string why)
+    {
+        if (_launchUnbound.Add((l.ProcessId, l.StartedAt, why))) { Log($"codex launch {l.ProcessId} in {l.Folder} is not bound to a registration: {why}"); }
     }
 
     // The same folder as a launch was asked for and Codex's hook recorded: Windows paths differ in
@@ -842,7 +874,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             // Unlisted, the processes' own hold says so.
             if (!observed.Listed || written is not { } at || now - at < Unaccounted.Grace) { holds.Add(Reason); continue; }
             var waited = now - at;
-            var writer = observed.Processes.Where(p => CouldHaveWritten(observed, accounted, p, at))
+            var writer = observed.Processes.Where(p => ExcludedWriter(observed, accounted, p, at) is null)
                 .OrderBy(p => p.Id).FirstOrDefault();
             if (writer is not null && waited < PidlessWriterLimit)
             {
@@ -856,7 +888,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (_pidlessExcused.Add((r.Path, written)))
             {
                 Log(writer is null
-                    ? $"carrying on without codex registration {r.SessionId}: it names no process, was written {(int)waited.TotalMinutes} min ago, and no running codex could have written it"
+                    ? $"carrying on without codex registration {r.SessionId}: it names no process, was written {(int)waited.TotalMinutes} min ago, and no running codex could have written it ({Excluded(observed, accounted, at)})"
                     : $"carrying on without codex registration {r.SessionId}: it names no process, and codex process {writer.Id}, which could have written it, has held it the most it may, {(int)PidlessWriterLimit.TotalMinutes} min");
             }
         }
@@ -864,12 +896,23 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         _pidlessHeldSaid.RemoveWhere(k => !current.Contains((k.Path, k.Written)));
     }
 
-    // A Codex nothing accounts for that could have written a registration naming no process: no launcher of one, interactive by its
-    // subcommand or its command line unread, and started no later than a second after the write.
-    static bool CouldHaveWritten(AgentProcessObservation observed, HashSet<int> accounted, AgentProcess p, DateTimeOffset at) =>
-        !accounted.Contains(p.Id) && !observed.Launchers.Contains(p.Id)
-        && (string.IsNullOrEmpty(p.CommandLine) || CodexLockDiscovery.IsInteractive(p.CommandLine))
-        && (p.StartedAt is not { } started || started <= at + TimeSpan.FromSeconds(1));
+    // Why a Codex could not have written a registration naming no process, or null when it could: something accounts for it, it is
+    // the launcher of an interactive Codex below it, it started over a second after the write, or it is no terminal (interactive by
+    // its subcommand, or its command line unread).
+    static string? ExcludedWriter(AgentProcessObservation observed, HashSet<int> accounted, AgentProcess p, DateTimeOffset at) =>
+        accounted.Contains(p.Id) ? "accounted for by a session or as a server"
+        : observed.Launchers.Contains(p.Id) ? "a launcher of an interactive codex below it"
+        : p.StartedAt is { } started && started > at + TimeSpan.FromSeconds(1) ? "started after the write"
+        : !string.IsNullOrEmpty(p.CommandLine) && !CodexLockDiscovery.IsInteractive(p.CommandLine) ? "not interactive (a server or a subcommand)"
+        : null;
+
+    // What the log says when every running Codex is excluded: each pid and why, the first few only.
+    static string Excluded(AgentProcessObservation observed, HashSet<int> accounted, DateTimeOffset at)
+    {
+        if (observed.Processes.Count == 0) { return "no codex process is running"; }
+        var each = observed.Processes.OrderBy(p => p.Id).Select(p => $"pid {p.Id}: {ExcludedWriter(observed, accounted, p, at)}").ToList();
+        return string.Join("; ", each.Take(6)) + (each.Count > 6 ? $"; and {each.Count - 6} more" : "");
+    }
 
     // When it was last written: its own Updated (the hook writes it on this machine, by this
     // clock), or the file's when it has none.

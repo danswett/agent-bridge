@@ -227,10 +227,13 @@ internal sealed class FakeProcesses : IProcessInspector
     // listed too, as a launcher such as npx does.
     public void Launches(int pid) { lock (_gate) { _launchers.Add(pid); } }
 
-    public void Run(AgentKind agent, int pid, string? commandLine = null, DateTimeOffset? startedAt = null)
+    // image: the process's image name without its extension, which the host lists only when it is one of the
+    // agent's (the real inspector's own test): a process of any other image runs but is not listed.
+    public void Run(AgentKind agent, int pid, string? commandLine = null, DateTimeOffset? startedAt = null, string? image = null)
     {
         lock (_gate)
         {
+            if (image is not null && !SystemProcessInspector.IsCandidateImage(agent, agent.ToString().ToLowerInvariant(), image)) { return; }
             if (!_live.TryGetValue(agent, out var list)) { _live[agent] = list = []; }
             list.RemoveAll(p => p.Id == pid);
             list.Add(new AgentProcess(pid, startedAt ?? Fixture.T0.AddHours(-1), commandLine));
