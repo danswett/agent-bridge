@@ -405,6 +405,29 @@ public sealed class MainTests : IAsyncLifetime
         Assert.All(plain, h => Assert.Equal(("A session", "danswett/agent-bridge", (string?)null), (h.Title, h.Detail, h.Machine)));
     }
 
+    // Owner request 09:33 PT Nov 24: search finds a session by its id too, the full GUID or any prefix of 4 or more hex characters, in any case,
+    // with or without dashes. A match on the id shows the session even when no word of its title matches; fewer than 4 characters match names only.
+    [Fact]
+    public async Task Search_also_finds_a_session_by_its_id_a_full_guid_or_a_prefix_of_four_or_more_hex_characters_any_case_with_or_without_dashes()
+    {
+        await SnapshotAsync();
+        const string guid = "0287fdf0-1a2b-4c3d-8e9f-0123456789ab";
+        await host.SendAsync(Events.SessionUpsert, Make.Session(guid, title: "Zebra planning", updated: Make.T0.AddMinutes(3)));
+        await Wait.UntilAsync(() => main.Sessions.Count == 3, "the new card");
+        IReadOnlyList<SearchHit> Find(string q) => TestUi.Read(() => main.Search(q));
+
+        foreach (var query in new[] { guid, guid.ToUpperInvariant(), guid.Replace("-", ""), "0287fdf0", "0287FDF0", "0287-fdf0", "0287-FDF0-1a2b", "0287", "0287fd" })
+        {
+            Assert.Equal([guid], Find(query).Select(h => h.SessionId));        // the name matches none of these words
+        }
+        // Fewer than 4 characters, a prefix the id does not start with, and a query longer than an id match nothing by id.
+        foreach (var query in new[] { "0", "02", "028", "8700", "fdf0", "0287fdf1", guid + "c", "0287 fdf0" }) { Assert.Empty(Find(query)); }
+        Assert.Empty(Find("askin"));                                       // not hex: never an id match, though "asking" starts with it
+        // The name still matches as before, and a title match is not lost to the id rule.
+        Assert.Equal([guid], Find("zebra").Select(h => h.SessionId));
+        Assert.Equal([guid], Find("ZEBRA plan").Select(h => h.SessionId));
+        Assert.Equal(["asking", "old"], Find("a session").Select(h => h.SessionId));
+    }
     [Fact]
     public async Task Choosing_a_search_result_opens_its_session_as_a_toast_click_does()
     {
