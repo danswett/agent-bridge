@@ -337,8 +337,10 @@ For a host-supplied `agent:` principal, the launcher checks only the result of t
 launch's `Worktrees.Create`, immediately after creation and before reservation, credentials
 or process start. Existing trees, resumes and transfers cannot take this path. W1's check
 requires isolation, host provenance, the approved repository/subdirectory, detached HEAD
-and clean state, and refuses Claude project configuration or links. Only Claude's list is
-confirmed; other agents fail closed. A missing or thrown check also refuses.
+and clean state, and refuses links and the agent's project configuration. Claude's and
+Codex's lists are confirmed ([agent-launch-scope.md §3](design/agent-launch-scope.md#3-what-an-agent-launch-may-contain),
+which also says what the check cannot guarantee for Codex); other agents fail closed. A
+missing or thrown check also refuses.
 
 A refusal removes only the new tree, using an in-memory creation receipt bound to this
 request and the immutable creation commit, using protected, nonrecursive removal.

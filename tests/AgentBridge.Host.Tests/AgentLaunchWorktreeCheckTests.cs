@@ -95,12 +95,144 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable, IClassFixture<A
 
     [Theory]
     [InlineData("copilot")]
-    [InlineData("codex")]
     [InlineData("agency")]
     [InlineData("auto")]
     [InlineData("")]
     public void An_agent_without_a_confirmed_configuration_list_is_refused(string agent) =>
         Assert.Contains("confirmed", Check(agent: agent));
+
+    // The folder above this test's root stands in for the user profile where none is given, so no test reads the real one.
+    string? Codex(WorkspaceConfig? workspace = null, WorktreeResult? result = null, string? profile = null) =>
+        AgentLaunchWorktreeCheck.Check(workspace ?? Workspace, result ?? created, "codex", profile ?? Path.GetDirectoryName(root)!);
+
+    [Fact]
+    public void Codex_meets_the_same_worktree_rules_as_Claude()
+    {
+        Assert.Null(Codex());
+        Assert.Equal("Agent launches require an isolated workspace.", Codex(Workspace with { Isolate = false }));
+        Assert.Equal("A fresh isolated worktree was not created.", Codex(result: created with { Problem = "creation failed" }));
+        Assert.Equal("The launch path does not match the approved isolated workspace.", Codex(result: created with { Path = repository }));
+        File.WriteAllText(Path.Combine(tree, "untracked"), "x");
+        Assert.Contains("clean", Codex());
+        File.Delete(Path.Combine(tree, "untracked"));
+        Run(tree, "switch", "-qc", "worker");
+        Assert.Contains("detached", Codex());
+        File.Delete(Marker);
+        Assert.Contains("host", Codex());
+    }
+
+    // One row or more for each name on Codex's list; the paths are what Codex reads there (docs/design/agent-launch-scope.md §3).
+    [Theory]
+    [InlineData(".codex/config.toml")]
+    [InlineData(".codex/hooks.json")]
+    [InlineData(".codex/rules/allow.rules")]
+    [InlineData(".agents/plugins/marketplace.json")]
+    [InlineData(".agents/skills/build/SKILL.md")]
+    [InlineData(".codex-plugin/plugin.json")]
+    [InlineData(".claude-plugin/marketplace.json")]
+    [InlineData(".cursor-plugin/marketplace.json")]
+    [InlineData(".claude/settings.json")]
+    [InlineData(".mcp.json")]
+    [InlineData("src/.codex/config.toml")]
+    [InlineData("src/.CODEX/config.toml")]
+    public void Configuration_Codex_could_load_is_refused(string relative)
+    {
+        // Left uncommitted, to spend no git process (see the class note): the configuration answer comes before the clean one.
+        Write(relative);
+        Assert.Equal("The repository contains project configuration Codex could load; agent launch is refused.", Codex());
+    }
+
+    [Fact]
+    public void Instruction_files_carry_no_authority_and_do_not_refuse_Codex()
+    {
+        Commit("AGENTS.md");
+        Commit("src/AGENTS.override.md");
+        Assert.Null(Codex());
+    }
+
+    [Theory]
+    [InlineData(".codex")]
+    [InlineData(".agents")]
+    public void Claude_is_not_refused_for_configuration_only_Codex_reads(string name)
+    {
+        Commit(name + "/file");
+        Directory.CreateDirectory(Path.Combine(repository, name));
+        Directory.CreateDirectory(Path.Combine(root, name));
+        Assert.Null(Check());
+    }
+
+    // A linked worktree takes Codex hooks from the same subfolder of the main checkout.
+    [Theory]
+    [InlineData(".codex")]
+    [InlineData("src/.codex")]
+    [InlineData("src/.agents")]
+    public void Main_checkout_configuration_down_to_the_launch_folder_refuses_Codex(string relative)
+    {
+        var workspace = Workspace with { Path = Path.Combine(repository, "src") };
+        var result = created with { Path = Path.Combine(tree, "src") };
+        Assert.Null(Codex(workspace, result));
+        Directory.CreateDirectory(Path.Combine(repository, relative));
+        Assert.Contains("Codex could load", Codex(workspace, result));
+    }
+
+    [Theory]
+    [InlineData(".codex")]
+    [InlineData(".agents")]
+    [InlineData(".codex-plugin")]
+    [InlineData(".claude-plugin")]
+    [InlineData(".cursor-plugin")]
+    public void Configuration_above_the_worktree_and_below_the_profile_refuses_Codex_and_the_profiles_own_does_not(string name)
+    {
+        Directory.CreateDirectory(Path.Combine(root, name));
+        Assert.Equal($"A folder above the worktree or main checkout holds {name}, which Codex could load; agent launch is refused.", Codex());
+        Assert.Null(Codex(profile: root));
+    }
+
+    [Fact]
+    public void Folders_above_the_worktree_and_above_the_main_checkout_are_each_checked()
+    {
+        var apart = Directory.CreateDirectory(Path.Combine(root, "apart")).FullName;
+        var moved = Path.Combine(apart, "tree");
+        Directory.Move(tree, moved);
+        File.WriteAllText(Path.Combine(repository, ".git", "worktrees", "tree", "gitdir"), Path.Combine(moved, ".git").Replace('\\', '/') + "\n");
+        var result = new WorktreeResult(moved, moved, null, "");
+        Assert.Null(Codex(result: result));
+        var config = Directory.CreateDirectory(Path.Combine(apart, ".codex")).FullName;
+        Assert.Contains("above", Codex(result: result));
+        Directory.Delete(config);
+
+        var home = Directory.CreateDirectory(Path.Combine(root, "home")).FullName;
+        var main = Path.Combine(home, "repo");
+        Directory.Move(repository, main);
+        File.WriteAllText(Path.Combine(moved, ".git"), $"gitdir: {Path.Combine(main, ".git", "worktrees", "tree").Replace('\\', '/')}\n");
+        var workspace = Workspace with { Path = main };
+        Assert.Null(Codex(workspace, result));
+        Directory.CreateDirectory(Path.Combine(home, ".codex"));
+        Assert.Contains("above", Codex(workspace, result));
+    }
+
+    // Claude's own folders above a worktree are common (a person's repos folder), and Codex never reads them there.
+    [Fact]
+    public void Claude_folders_above_the_worktree_do_not_refuse_Codex()
+    {
+        Directory.CreateDirectory(Path.Combine(root, ".claude"));
+        File.WriteAllText(Path.Combine(root, ".mcp.json"), "{}");
+        Assert.Null(Codex());
+    }
+
+    void Write(string relative)
+    {
+        var path = Path.Combine(tree, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{}");
+    }
+
+    void Commit(string relative)
+    {
+        Write(relative);
+        Run(tree, "add", ".");
+        Run(tree, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "config");
+    }
 
     [Fact]
     public void A_nonisolated_workspace_or_failed_creation_is_refused()
@@ -184,8 +316,10 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable, IClassFixture<A
         Assert.Contains("configuration", Check());
     }
 
-    [Fact]
-    public void A_directory_link_cannot_hide_configuration_or_escape_the_worktree()
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public void A_directory_link_cannot_hide_configuration_or_escape_the_worktree(string agent)
     {
         var outside = Directory.CreateDirectory(Path.Combine(root, "outside")).FullName;
         Directory.CreateDirectory(Path.Combine(outside, ".claude"));
@@ -204,7 +338,8 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable, IClassFixture<A
         else { Directory.CreateSymbolicLink(link, outside); }
         try
         {
-            Assert.Equal("A worktree link prevents verification of project configuration.", Check());
+            Assert.Equal("A worktree link prevents verification of project configuration.",
+                AgentLaunchWorktreeCheck.Check(Workspace, created, agent, Path.GetDirectoryName(root)!));
         }
         finally
         {

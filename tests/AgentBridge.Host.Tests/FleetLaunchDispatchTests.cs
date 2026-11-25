@@ -96,6 +96,48 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         Assert.All(rows.Skip(1), row => Assert.Equal("fleet", JsonDocument.Parse(row).RootElement.GetProperty("grant").GetString()));
     }
 
+    // #3644: a Codex fleet worker meets the worktree check with its own configuration list. The check's answer is read here, not
+    // only the launch's outcome: what follows the check (a Codex launch's credential) is not this check's to decide.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_codex_fleet_worker_passes_the_worktree_check_unless_the_repository_holds_codex_configuration(bool configured)
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.exe";
+        Directory.CreateDirectory(f.CodexRegistrations);
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        if (configured)
+        {
+            Directory.CreateDirectory(Path.Combine(app, ".codex"));
+            File.WriteAllText(Path.Combine(app, ".codex", "config.toml"), "approval_policy = \"never\"\n");
+        }
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        starter.Registers = false;
+        starter.ExitsAtOnce = true;
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        var config = Config(c => c with { Workspaces = [new("App", app, true)] });
+        var answers = new List<string?>();
+        var launcher = Launcher(config, credentials: new AgentCredentials(profile, "machine"), agentWorktreeCheck: (workspace, made, agent) =>
+            {
+                var answer = AgentLaunchWorktreeCheck.Check(workspace, made, agent, f.Root);
+                answers.Add(answer);
+                return answer;
+            },
+            agentWorktreeRefusalAudit: (_, _, _) => true);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "codex", Workspace = "App", Permissions = LaunchProtocol.AllowAll, Prompt = "fixture" };
+        const string principal = "script:machine/dispatcher";
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile), new("local", "agent", principal, null), fleet: true, refusal: () => null);
+
+        var answer = Assert.Single(answers);
+        if (!configured) { Assert.Null(answer); return; }
+        Assert.Contains("Codex could load", answer);
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Empty(starter.Specs);
+        Assert.Empty(Directory.GetDirectories(config.WorktreeRoot));
+    }
+
     // #4318: the role a fleet launch records goes through RoleFor, never the request's own role: a launch by an agent (or script)
     // that is not itself recorded with that role records none, so no builder or dispatcher can mint a coordinator.
     [Theory]
