@@ -60,7 +60,11 @@ public sealed class UpdateApplyCompletion(
                         return End(UpdateApplyEnd.Failed, "exit-failed");
                     if (UpdateVersions.Identity(last.ActiveVersion) is not { } active)
                         return End(UpdateApplyEnd.Unknown, "version-unknown", "active-version");
-                    if (!string.Equals(active, UpdateVersions.Identity(targetVersion), StringComparison.OrdinalIgnoreCase))
+                    // An unknown target (0.0.0) is not skew; version-skew is a decision input for the host.
+                    if (UpdateVersions.Identity(targetVersion) is not { } target)
+                        return End(UpdateApplyEnd.Unknown, "target-unknown", "target-version");
+                    // Case-insensitive like Velopack's SemanticVersion, which installs the active version.
+                    if (!string.Equals(active, target, StringComparison.OrdinalIgnoreCase))
                         return End(UpdateApplyEnd.Unknown, "version-skew", "active-version");
                     return End(UpdateApplyEnd.Completed, null);
                 }
