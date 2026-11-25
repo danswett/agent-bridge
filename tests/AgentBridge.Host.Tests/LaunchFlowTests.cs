@@ -223,6 +223,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         public string? Prepare(string session, string launchId) { Calls.Add($"prepare {session} {launchId}"); return "tok-" + launchId; }
         public void Bind(string launchId, int processId, DateTimeOffset startedAt) => Calls.Add($"bind {launchId} {processId}");
         public void Abandon(string launchId) => Calls.Add($"abandon {launchId}");
+        public void Resolve(string launchId, string session) => Calls.Add($"resolve {launchId} {session}");
     }
 
     [Fact]

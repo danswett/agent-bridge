@@ -1360,9 +1360,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 provenance.Preparing(key, sessionId, fleet ? "fleet" : null,
                     provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
             }
-            // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
+            // A session whose id the agent chooses (Codex) has none yet: its credential is issued unresolved, bound to the process, and
+            // takes the session's id when the process tree proves which session this launch started (Registered, #3644).
             var credentialIssued = false;
-            if (credentials is not null && sessionId.Length > 0)
+            if (credentials is not null)
             {
                 try { environment[Launchers.TokenVariable] = fleet ? credentials.PrepareFleet(sessionId, launchId) : credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
                 catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
@@ -1388,7 +1389,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-            { Transcript = TranscriptOf(plan.Launcher, sessionId, started.StartedAt), AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize };
+            { Transcript = TranscriptOf(plan.Launcher, sessionId, started.StartedAt), AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize,
+                OpenCredential = credentialIssued && sessionId.Length == 0 ? launchId : null };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1593,6 +1595,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 }
             }
             if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait for its own transcript activity or it exits"); }
+            // A Codex whose session was never proved to be this launch's keeps no credential: it would name no session to speak as.
+            if (Interlocked.Exchange(ref p.OpenCredential, null) is { } open)
+            {
+                try { credentials!.Abandon(open); }
+                catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException) { log($"launch {Short(p.Key)}: the agent credential could not be given up: {e.GetType().Name}"); }
+                log($"launch {Short(p.Key)}: {label} gets no agent credential: its session was not proved to be this launch's by its process");
+            }
             if (p.Reservation is { } token && p.Worktree is { } worktree)
             {
                 // Only once it has registered: one still starting stays protected, and one that
@@ -1630,9 +1639,22 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 launchedOn[s.Id] = p.Started;
                 p.Bound = s.Id;
             }
+            // Only the process tree proves whose session it is; a timing guess must never give a credential someone else's identity.
+            if (own == true) { ResolveCredential(p, s.Id); }
             return s.Id;
         }
         return null;
+    }
+
+    // Once: the launch's credential answers for the session its process tree proved. Never throws into the follow.
+    void ResolveCredential(Pending p, string session)
+    {
+        if (Interlocked.Exchange(ref p.OpenCredential, null) is not { } launchId) { return; }
+        try { credentials!.Resolve(launchId, session); }
+        catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            log($"launch {Short(p.Key)}: the agent credential could not be given its session: {e.GetType().Name}");
+        }
     }
 
     // The Codex launches still waiting for their session, as discovery binds a hook registration that
@@ -2125,6 +2147,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public string? Reservation { get; } = reservation;
         public LaunchedWith Launched { get; } = launched;
         public Action<string>? AuditRegistered;
+        // A Codex launch's credential, issued before its session was known: the launch id until the session is proved (Resolve), then null.
+        public string? OpenCredential;
         public TaskCompletionSource<LaunchResult> Decided { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public volatile StartupQuestion Question;
         // Seen to close after a person's Quit: it asks nothing from then on, whatever Question
