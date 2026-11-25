@@ -55,7 +55,7 @@ public sealed class FleetPublisherTests
             Assert.Equal(i, sent[^1].GetProperty("seq").GetInt64());
             Assert.Equal("published", publication.Status.Result);
             disconnected.SetResult();
-            await run.WaitAsync(TimeSpan.FromSeconds(5));
+            await run.WaitAsync(TimeSpan.FromSeconds(5), time);
         }
         time.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(2, sent.Count);
@@ -151,7 +151,7 @@ public sealed class FleetPublisherTests
         finally
         {
             disconnected.SetResult();
-            await run.WaitAsync(TimeSpan.FromSeconds(5));
+            await run.WaitAsync(TimeSpan.FromSeconds(5), time);
         }
     }
 
