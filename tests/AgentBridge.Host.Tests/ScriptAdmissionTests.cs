@@ -167,6 +167,30 @@ public sealed class ScriptAdmissionTests : IDisposable
         Assert.Single(Rows("scripts.finished"));
     }
 
+    // Behavioural routing: the local API hands both ops to the admission, which answers the closed code; a channel that is not a local pipe is refused the same way
+    // (and an op nobody routes would not be).
+    [Theory]
+    [InlineData(ScriptAdmission.AdmitOp)]
+    [InlineData(ScriptAdmission.FinishedOp)]
+    public async Task The_local_api_routes_the_two_ops_to_the_admission_and_a_channel_that_is_not_a_local_pipe_is_refused(string op)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var (admission, store, _) = Open();
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Other, "x")), credentials: store, scriptAdmission: admission);
+        var data = JsonSerializer.SerializeToElement(new { name = "dispatcher", version = 1 });
+        Assert.Equal("refused: refused", (await Assert.ThrowsAsync<InvalidOperationException>(() => handler(new NotLocal(), op, data))).Message);
+    }
+
+    sealed class NotLocal : AgentBridge.Transport.IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public System.Threading.Tasks.Task Closed => System.Threading.Tasks.Task.CompletedTask;
+        public System.Threading.Tasks.Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => System.Threading.Tasks.Task.FromResult(0L);
+    }
+
     // The local pipe hands these two ops to ScriptAdmission, which is built with the host's credentials and audit log (a real read of the wiring).
     [Fact]
     public void The_local_api_routes_the_two_ops_to_the_admission_and_program_builds_one()
