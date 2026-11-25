@@ -10,20 +10,20 @@ using Xunit;
 // auth-state.test.mjs holds the PWA to the same rules.
 public sealed class SignInTests
 {
-    static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+    internal static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
-    static Session WithAttention(Session s, string? attention) => AuthState.Attach(s, Json(attention is null ? "{}" : $$"""{"attention":{{attention}}}"""));
+    internal static Session WithAttention(Session s, string? attention) => AuthState.Attach(s, Json(attention is null ? "{}" : $$"""{"attention":{{attention}}}"""));
 
-    static Session Needing(string id, string account = "octocat", AgentKind agent = AgentKind.Copilot, string? signIn = "phone", string? recovery = null, string? title = null) =>
+    internal static Session Needing(string id, string account = "octocat", AgentKind agent = AgentKind.Copilot, string? signIn = "phone", string? recovery = null, string? title = null) =>
         WithAttention(Make.Session(id: id, title: title ?? $"Session {id}") with { Agent = agent },
             $$"""{"kind":"signInNeeded","since":"2026-11-05T00:40:00Z","agent":"{{AuthState.WireName(agent)}}","account":"{{account}}"{{(signIn is null ? "" : $",\"signIn\":\"{signIn}\"")}}{{(recovery is null ? "" : $",\"recovery\":\"{recovery}\"")}}}""");
 
-    static string Code(string userCode = "WDJB-MJHT", string uri = "https://github.com/login/device") =>
+    internal static string Code(string userCode = "WDJB-MJHT", string uri = "https://github.com/login/device") =>
         JsonSerializer.Serialize(new { flow = "flow-1", agent = "copilot", userCode, verificationUri = uri, expiresAt = "2099-01-01T00:00:00Z" });
 
     // Built at run time, so no scanner takes the tests for a leak.
-    static readonly string GitHubToken = "gh" + "p_" + new string('a', 36);
-    static readonly string Jwt = "ey" + "J" + new string('b', 20) + "." + new string('c', 20) + "." + new string('d', 20);
+    internal static readonly string GitHubToken = "gh" + "p_" + new string('a', 36);
+    internal static readonly string Jwt = "ey" + "J" + new string('b', 20) + "." + new string('c', 20) + "." + new string('d', 20);
 
     [Theory]
     [InlineData("http://github.com/login/device")]
@@ -207,7 +207,7 @@ public sealed class SignInTests
         Assert.Equal(3, StatusRules.For(WithAttention(Make.Session(status: SessionStatus.Working), "null")).Rule);
     }
 
-    static IReadOnlyList<SignInBanners.Banner> Banners(IReadOnlyList<Session> sessions, bool canSignIn = true, Dictionary<string, SignInBanners.Flow>? flows = null, Dictionary<string, SignInBanners.Resolved>? resolved = null) =>
+    internal static IReadOnlyList<SignInBanners.Banner> Banners(IReadOnlyList<Session> sessions, bool canSignIn = true, Dictionary<string, SignInBanners.Flow>? flows = null, Dictionary<string, SignInBanners.Resolved>? resolved = null) =>
         SignInBanners.For([new SignInBanners.Source("m1", "node-a", sessions, canSignIn)], flows ?? [], resolved ?? [], DateTimeOffset.Parse("2026-11-05T00:45:00Z"));
 
     [Theory]
@@ -367,7 +367,7 @@ public sealed class SignInTests
     }
 
     // The demo's other machine, as the app reaches it, running #800's scenario.
-    sealed class Demo : IAsyncDisposable
+    internal sealed class Demo : IAsyncDisposable
     {
         public DemoHost Host { get; } = DemoHost.Start(remote: true);
         public HostConnection Connection { get; }
@@ -562,25 +562,6 @@ public sealed class SignInTests
         await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code", patience: TimeSpan.FromSeconds(5));
     }
 
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_held_code_that_runs_out_before_its_starts_result_leaves_only_that_it_did()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
-        demo.Host.NextCodeLife = TimeSpan.FromSeconds(1.5);
-        demo.Host.NextStartDelay = TimeSpan.FromSeconds(4);
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInCodesHeld == 1, "the code held for the start");
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        TestUi.Read(() => { for (var i = 0; i < 5; i++) { demo.Main.Tick(); } return 0; });
-        Assert.Equal(0, TestUi.Read(() => demo.Main.SignInCodesHeld));
-        // Once the start's result comes, the sheet says the code ran out and offers Try again.
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { Expired: true, HasCode: false, CanRetry: true }, "the expired sheet", patience: TimeSpan.FromSeconds(6),
-            why: () => $"sheet {demo.Main.SignInSheet?.Shape ?? "none"}");
-    }
-
     // Judged by growth, not milliseconds (#681): a run of "eyJ" with no dot is read once.
     [Fact]
     public void A_long_run_of_JWT_like_prefixes_is_judged_in_time_proportional_to_its_length()
@@ -637,56 +618,6 @@ public sealed class SignInTests
             }
             return null;
         }
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_start_refused_with_no_flow_drops_a_cancelled_presss_late_code_at_once()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
-        // Press A: its code comes late, after the person has cancelled.
-        demo.Host.NextCodeDelay = TimeSpan.FromSeconds(1.5);
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Host.SignInLog.Count == 1 && demo.Main.SignInSheet is not null, "the first sheet");
-        await Task.Delay(300);
-        Assert.Equal(0, TestUi.Read(() => demo.Main.SignInCodesHeld));
-        TestUi.Read(() => { demo.Main.CancelSignIn(); return 0; });
-        // Press B: slow, and refused with no flow. A's late code comes while it starts, and is held for it.
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true, Busy: false }, "Sign in again");
-        demo.Host.NextStartRefusal = "this credential store is busy";
-        demo.Host.NextStartDelay = TimeSpan.FromSeconds(4);
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInCodesHeld == 1, "A's late code held while B starts");
-        // The host's reason in the app's words, never its own (ui.md §6.13).
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is null && demo.Banner is { Line: "Sign-in refused \u00b7 another sign-in is under way" }, "B refused, the sheet closed", patience: TimeSpan.FromSeconds(8),
-            why: () => $"sheet {demo.Main.SignInSheet?.Shape ?? "none"}; banner {demo.Banner?.Line}");
-        // At once, not after the ten seconds an early event is otherwise held.
-        Assert.Equal(0, TestUi.Read(() => demo.Main.SignInCodesHeld));
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_start_that_names_another_flow_drops_a_cancelled_presss_late_code_once_its_own_are_replayed()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
-        // Press A: its code comes late, after the person has cancelled.
-        demo.Host.NextCodeDelay = TimeSpan.FromSeconds(1.5);
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Host.SignInLog.Count == 1 && demo.Main.SignInSheet is not null, "the first sheet");
-        await Task.Delay(300);
-        TestUi.Read(() => { demo.Main.CancelSignIn(); return 0; });
-        // Press B: slow, and started in a flow of its own. Its code and A's late one are both held for it.
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true, Busy: false }, "Sign in again");
-        demo.Host.NextStartDelay = TimeSpan.FromSeconds(3);
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInCodesHeld == 2, "B's code and A's late one held while B starts");
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "B's own code", patience: TimeSpan.FromSeconds(8));
-        // B's code is its flow's; A's, which nothing can claim now, is gone at once.
-        Assert.Equal(1, TestUi.Read(() => demo.Main.SignInCodesHeld));
     }
 
     [Fact]
@@ -759,50 +690,6 @@ public sealed class SignInTests
         Assert.Equal([AuthState.Start, AuthState.Cancel, "cancelled", AuthState.Start], demo.Host.SignInLog);
         await Task.Delay(300);
         Assert.True(TestUi.Read(() => demo.Main.SignInSheet is { HasCode: true }));
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_press_whose_wait_was_cancelled_leaves_the_next_press_still_waiting_for_the_slow_cancel()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
-        demo.Host.NextCancelDelay = TimeSpan.FromSeconds(2);
-        TestUi.Read(() => { demo.Main.CancelSignIn(); return 0; });
-        // Pressed again, and cancelled while it waits for the slow cancel.
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true, Busy: false }, "Sign in again");
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Task.Delay(200);
-        TestUi.Read(() => { demo.Main.CancelSignIn(); return 0; });
-        // Pressed a third time: the old cancel still hasn't finished, and this press waits for it too.
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true, Busy: false }, "Sign in a third time");
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true } && demo.Host.SignInLog.Count == 4, "the new code", patience: TimeSpan.FromSeconds(8), why: () => string.Join(",", demo.Host.SignInLog));
-        Assert.Equal([AuthState.Start, AuthState.Cancel, "cancelled", AuthState.Start], demo.Host.SignInLog);
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task Try_again_given_up_while_its_cancel_finishes_closes_the_sheet_and_sends_nothing()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
-        demo.Host.NextVerificationUri = "https://github.com.evil.example/login/device";
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { Refused: true, CanRetry: true }, "the refused sheet");
-        demo.Host.NextCancelDelay = TimeSpan.FromSeconds(1.5);
-        TestUi.Read(() => { demo.Main.RetrySignIn(); return 0; });
-        await Task.Delay(200);
-        // The host stops offering this device sign-in while the cancel finishes.
-        await demo.Host.SignInWayAsync(null);
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is null, "the sheet closed, not left on Starting", patience: TimeSpan.FromSeconds(5),
-            why: () => $"sheet {demo.Main.SignInSheet?.Shape ?? "none"}; log {string.Join(",", demo.Host.SignInLog)}");
-        await Task.Delay(300);
-        Assert.Equal([AuthState.Start, AuthState.Cancel, "cancelled"], demo.Host.SignInLog);
     }
 
     [Fact]
@@ -892,23 +779,6 @@ public sealed class SignInTests
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task A_code_that_runs_out_is_dropped_and_the_sheet_offers_Try_again()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { HasVerb: true }, "the sign-in banner");
-        demo.Host.NextCodeLife = TimeSpan.FromSeconds(2);
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
-        await Task.Delay(2200);
-        TestUi.Read(() => { for (var i = 0; i < 5; i++) { demo.Main.Tick(); } return 0; });
-        Assert.True(TestUi.Read(() => demo.Main.SignInSheet is { Expired: true, HasCode: false, CanRetry: true }));
-        Assert.Equal(0, TestUi.Read(() => demo.Main.SignInCodesHeld));
-        Assert.Contains("Sign-in code expired for Copilot on Build server", demo.Said);
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
     public async Task A_machine_that_goes_away_mid_flow_keeps_no_code_never_reads_as_recovered_and_offers_a_press_once_back()
     {
         await using var fleet = new Fleeted();
@@ -955,7 +825,7 @@ public sealed class SignInTests
     }
 
     // The demo's other machine through the relay, as Fleet reaches it, so that it can go away.
-    sealed class Fleeted : IAsyncDisposable
+    internal sealed class Fleeted : IAsyncDisposable
     {
         readonly FakeHost localHost = new();
         readonly LockedDispatcher ui = new();
@@ -1029,28 +899,6 @@ public sealed class SignInTests
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task Signed_in_before_the_host_says_pending_never_flashes_Show_code_and_nothing_is_said_twice()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { Sessions.Count: 3 }, "the sign-in banner");
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
-        // Another sign-in is under way at the host (signingIn), and this one's done comes before its pending.
-        await demo.Host.SignInUnderWayAsync(true);
-        await demo.Host.FinishSignInAsync("signedIn", pendingFirst: false);
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is null, "the sheet to close");
-        var lines = TestUi.Read(() => demo.Main.SignIns.Select(b => (b.Line, b.VerbText)).ToList());
-        Assert.Equal([("Signed in · waiting for 3 sessions to confirm", "Sign in")], lines);
-
-        await demo.Host.SignedInPendingAsync();
-        await Wait.UntilAsync(() => demo.Main.SignIns.Any(b => !b.Needed), "confirming");
-        Assert.DoesNotContain(TestUi.Read(() => demo.Main.SignIns.Select(b => b.VerbText).ToList()), v => v == "Show code");
-        Assert.Single(demo.Said, "Copilot on Build server: Signed in · waiting for 3 sessions to confirm");
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
     public async Task A_signed_in_hold_with_no_pending_ends_on_its_second_and_the_banner_follows_the_host_again()
     {
         await using var demo = new Demo();
@@ -1066,23 +914,6 @@ public sealed class SignInTests
         // The first tick: not the five-second sweep, so only the hold's own deadline can end it.
         TestUi.Read(() => { demo.Main.Tick(); return 0; });
         Assert.Equal(("Waiting for sign-in", "Show code"), TestUi.Read(() => (demo.Main.SignIns.Single().Line, demo.Main.SignIns.Single().VerbText)));
-    }
-
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task A_session_that_fails_sign_in_again_while_confirming_goes_back_to_Needs_sign_in()
-    {
-        await using var demo = new Demo();
-        await demo.Host.NeedSignInAsync();
-        await Wait.UntilAsync(() => demo.Banner is { Sessions.Count: 3 }, "the sign-in banner");
-        TestUi.Read(() => { demo.Banner!.Press(); return 0; });
-        await Wait.UntilAsync(() => demo.Main.SignInSheet is { HasCode: true }, "the code");
-        await demo.Host.FinishSignInAsync("signedIn");
-        await Wait.UntilAsync(() => demo.Main.SignIns.Any(b => b.Line == "Signed in · waiting for 3 sessions to confirm"), "waiting to confirm");
-
-        await demo.Host.FailSignInAgainAsync();
-        await Wait.UntilAsync(() => demo.Banner is { ListsSessions: true, HasVerb: true } b && b.Line.StartsWith("3 sessions affected: ", StringComparison.Ordinal), "needed again", why: () => string.Join(" | ", demo.Main.SignIns.Select(b => b.Line)));
-        Assert.True(TestUi.Read(() => DemoHost.SignInSessions.All(id => demo.Main.Sessions.Single(c => c.Id == id).Line.FirstFact == "Needs sign-in")));
     }
 
     [Theory]
