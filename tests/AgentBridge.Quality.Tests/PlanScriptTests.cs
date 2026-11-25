@@ -7,35 +7,69 @@ namespace AgentBridge.Quality.Tests;
 [Trait("Category", "Process")]
 public class PlanScriptTests
 {
-    [Theory]
-    [InlineData("pull_request", ".github/workflows/merge-rule.yml", false, true)]
-    [InlineData("pull_request", "quality/merge-rule.yml", false, true)]
-    [InlineData("pull_request", ".github/workflows/ci.yml", true, true)]
-    [InlineData("pull_request", "src/AgentBridge.App/View.cs", true, true)]
-    [InlineData("pull_request", "build/pack-app.ps1", true, true)]
-    [InlineData("pull_request", "Directory.Build.props", true, true)]
-    [InlineData("pull_request", ".github/actions/install-trivy/action.yml", true, true)]
-    [InlineData("push", "docs/guide.md", false, false)]
-    [InlineData("push", "docs/guide.md", false, true)]
-    [InlineData("push", ".github/workflows/merge-rule.yml", false, true)]
-    [InlineData("push", ".github/CODEOWNERS", false, true)]
-    [InlineData("push", "quality/merge-rule.yml", false, true)]
-    [InlineData("push", ".github/workflows/ci.yml", true, true)]
-    [InlineData("push", "src/AgentBridge.App/View.cs", true, false)]
-    [InlineData("push", "src/AgentBridge.App/View.cs", true, true)]
-    [InlineData("push", "build/pack-app.ps1", true, true)]
-    [InlineData("push", "Directory.Build.props", true, true)]
-    [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
-    [InlineData("push", "tests/Example.Tests/Test.cs", false, false)]
-    [InlineData("push", "tests/Example.Tests/Shared.cs", true, false)]
-    [InlineData("pull_request", "tests/Example.Tests/Test.cs", false, false)]
-    [InlineData("push", "tests/AgentBridge.Quality.Tests/Test.cs", false, true)]
-    [InlineData("push", "docs/protocol/examples/demo.json", true, false)]
-    [InlineData("push", "unknown/input.txt", false, true)]
-    [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true, true)]
-    public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
-        string eventName, string changed, bool packages, bool wholeRing) =>
-        CheckPlan(eventName, changed, packages, wholeRing);
+    // The installer rows each start the plan script, about 2 to 6 s apiece, and a class runs its tests one after
+    // another: four nested classes (each its own xUnit collection, so they run in parallel) hold every row once,
+    // in its order, under the same method name (#2454). Each repeats the class's Process trait, which nesting drops.
+    [Trait("Category", "Process")]
+    public sealed class Installer1
+    {
+        [Theory]
+        [InlineData("pull_request", ".github/workflows/merge-rule.yml", false, true)]
+        [InlineData("pull_request", "quality/merge-rule.yml", false, true)]
+        [InlineData("pull_request", ".github/workflows/ci.yml", true, true)]
+        [InlineData("pull_request", "src/AgentBridge.App/View.cs", true, true)]
+        [InlineData("pull_request", "build/pack-app.ps1", true, true)]
+        [InlineData("pull_request", "Directory.Build.props", true, true)]
+        [InlineData("pull_request", ".github/actions/install-trivy/action.yml", true, true)]
+        public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
+            string eventName, string changed, bool packages, bool wholeRing) =>
+            CheckPlan(eventName, changed, packages, wholeRing);
+    }
+
+    [Trait("Category", "Process")]
+    public sealed class Installer2
+    {
+        [Theory]
+        [InlineData("push", "docs/guide.md", false, false)]
+        [InlineData("push", "docs/guide.md", false, true)]
+        [InlineData("push", ".github/workflows/merge-rule.yml", false, true)]
+        [InlineData("push", ".github/CODEOWNERS", false, true)]
+        [InlineData("push", "quality/merge-rule.yml", false, true)]
+        [InlineData("push", ".github/workflows/ci.yml", true, true)]
+        public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
+            string eventName, string changed, bool packages, bool wholeRing) =>
+            CheckPlan(eventName, changed, packages, wholeRing);
+    }
+
+    [Trait("Category", "Process")]
+    public sealed class Installer3
+    {
+        [Theory]
+        [InlineData("push", "src/AgentBridge.App/View.cs", true, false)]
+        [InlineData("push", "src/AgentBridge.App/View.cs", true, true)]
+        [InlineData("push", "build/pack-app.ps1", true, true)]
+        [InlineData("push", "Directory.Build.props", true, true)]
+        [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
+        [InlineData("push", "tests/Example.Tests/Test.cs", false, false)]
+        public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
+            string eventName, string changed, bool packages, bool wholeRing) =>
+            CheckPlan(eventName, changed, packages, wholeRing);
+    }
+
+    [Trait("Category", "Process")]
+    public sealed class Installer4
+    {
+        [Theory]
+        [InlineData("push", "tests/Example.Tests/Shared.cs", true, false)]
+        [InlineData("pull_request", "tests/Example.Tests/Test.cs", false, false)]
+        [InlineData("push", "tests/AgentBridge.Quality.Tests/Test.cs", false, true)]
+        [InlineData("push", "docs/protocol/examples/demo.json", true, false)]
+        [InlineData("push", "unknown/input.txt", false, true)]
+        [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true, true)]
+        public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
+            string eventName, string changed, bool packages, bool wholeRing) =>
+            CheckPlan(eventName, changed, packages, wholeRing);
+    }
 
     [Fact]
     public Task A_test_and_code_change_cannot_skip_main_product() =>
