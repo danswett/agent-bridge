@@ -21,6 +21,8 @@ public sealed record AgentPolicy
 
     public bool Enabled { get; init; }
     public bool LaunchEnabled { get; init; }
+    // The fleet launch route (launch:fleet script credentials). Off until the owner sets agents.fleetLaunch.enabled in config.json; never read from a wire request (#2770).
+    public bool FleetLaunchEnabled { get; init; }
     public IReadOnlyList<string> FleetWorkspaces { get; init; } = [];
     public int CredentialDays { get; init; } = DefaultCredentialDays;
     public string IssueLaunched { get; init; } = ScopeNone;
@@ -58,6 +60,14 @@ public sealed record AgentPolicy
                     {
                         if (f.Name == "workspaces") { policy = policy with { FleetWorkspaces = Strings(f.Value, "agents.fleet.workspaces", problems) ?? [] }; }
                         else { Unknown($"agents.fleet.{f.Name}", problems); }
+                    }
+                    break;
+                case "fleetLaunch":
+                    if (!Object(p.Value, "agents.fleetLaunch", problems, out var fleetLaunch)) { return Denied(problems); }
+                    foreach (var f in fleetLaunch.EnumerateObject())
+                    {
+                        if (f.Name == "enabled") { policy = policy with { FleetLaunchEnabled = Bool(f.Value, "agents.fleetLaunch.enabled", problems) }; }
+                        else { Unknown($"agents.fleetLaunch.{f.Name}", problems); }
                     }
                     break;
                 case "launch":
@@ -322,7 +332,7 @@ public sealed record AgentPolicyLimits
                 case "perPairPerMinute": result = result with { PerPairPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerPairPerMinute, d.PerPairPerMinute, problems) }; break;
                 case "perTargetPerMinute": result = result with { PerTargetPerMinute = AgentPolicy.Int(p.Value, path, 1, d.PerTargetPerMinute, d.PerTargetPerMinute, problems) }; break;
                 case "launchesPerOriginPerHour" or "launchesPerMachinePerHour" or "launchAttemptsPerOriginPerHour"
-                    or "liveAgentLaunched" or "agentLaunchedIdleHours": break;
+                    or "liveAgentLaunched" or "agentLaunchedIdleHours" or "fleetPerHour" or "liveFleetWorkers": break;
                 default: problems.Add($"{path} is not a setting; ignored"); break;
             }
         }

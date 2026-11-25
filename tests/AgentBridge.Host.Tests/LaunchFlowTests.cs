@@ -148,6 +148,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Journal = journal,
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
+            FleetAdmission = () => new AgentBridge.Host.Delivery.Launch.FleetLimits(8, 6), // the host's defaults (#2770)
         }, log: Log, attachments: attachments, credentials: credentials, account: account);
     }
 

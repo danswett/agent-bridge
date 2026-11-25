@@ -15,8 +15,8 @@ public sealed class FleetLaunchGrantTests : IDisposable
     static AgentCredential Script => AgentCredential.Script("fixture", "machine", "dispatcher", Now) with { FleetLaunch = true };
     static LaunchRequest Request => new() { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
         Workspace = "workers", Permissions = LaunchProtocol.AllowAll };
-    void Config(string workspace = "workers", bool isolate = true) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
-        JsonSerializer.Serialize(new { agents = new { enabled = true, fleet = new { workspaces = new[] { workspace } } },
+    void Config(string workspace = "workers", bool isolate = true, bool fleetLaunch = true) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+        JsonSerializer.Serialize(new { agents = new { enabled = true, fleetLaunch = new { enabled = fleetLaunch }, fleet = new { workspaces = new[] { workspace } } },
             launch = new { workspaces = new[] { new { label = "workers", path = folder, isolate } } } }));
     public void Dispose() => Directory.Delete(folder, true);
 
@@ -32,6 +32,19 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Contains("isolated", grant.CheckLaunch(Script, Outside, Request));
         Config();
         Assert.Contains("listed", grant.CheckLaunch(Script, Outside, Request with { Workspace = "unknown" }));
+    }
+
+    // #2770: the route is a config switch, off by default, set only by the owner in config.json: with it off a launch is refused whatever else is right.
+    [Fact]
+    public void The_fleet_launch_route_is_off_until_the_owner_sets_agents_fleetLaunch_enabled()
+    {
+        var grant = new FleetLaunchGrant(folder);
+        Config(fleetLaunch: false);
+        Assert.Contains("fleetLaunch", grant.CheckLaunch(Script, Outside, Request));
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{"agents":{"enabled":true,"fleet":{"workspaces":["workers"]}}}""");
+        Assert.Contains("fleetLaunch", grant.CheckLaunch(Script, Outside, Request));
+        Config();
+        Assert.Null(grant.CheckLaunch(Script, Outside, Request));
     }
 
     [Fact]
@@ -180,6 +193,36 @@ public sealed class FleetLaunchGrantTests : IDisposable
         var overflow = agent.CheckLaunch("agent:overflow", Guid.NewGuid().ToString(), "hash");
         Assert.False(overflow.Allowed);
         Assert.Equal("rate-limited", overflow.Reason);
+    }
+
+    // The #4459 read: a launch refused for a cap is on an audit row, with the limits in force (the intent row only says "reserved").
+    [Fact]
+    public async Task A_fleet_launch_refused_for_a_cap_is_audited_with_the_limits_in_force()
+    {
+        var audit = new AgentAuditLog(folder);
+        var sessions = new SessionService(null!, new("machine", "fixture", "windows", "1"), launcher: new CappedLauncher()) { FleetLaunchSwitch = () => true };
+        var request = Request;
+        var result = await sessions.LaunchFleetAsync(request, "script:machine/dispatcher", audit, () => null, _ => null);
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        var rows = File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "agents-*.jsonl")));
+        var row = Assert.Single(rows, r => r.Contains("fleet.launch.cap"));
+        Assert.Contains("limits in force: 8 an hour, 6 live", row);
+        Assert.Contains(request.Request, row);
+        Assert.Contains("refused", row);
+    }
+
+    sealed class CappedLauncher : ISessionLauncher
+    {
+        public bool Available => true;
+        public LaunchConfig FleetConfig => LaunchConfig.Default;
+        public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare, CancellationToken cancellationToken = default)
+        {
+            prepare(Guid.NewGuid());
+            return Task.FromResult(new LaunchResult(LaunchOutcome.Refused,
+                "fleet launch limit: 8 an hour on this machine; the next slot opens when the oldest of them is an hour old (limits in force: 8 an hour, 6 live)"));
+        }
     }
 
     sealed class AdmissionLauncher(int live) : ISessionLauncher

@@ -45,6 +45,7 @@ public sealed class FleetLaunchGrant(string profileFolder, ProfileDisk? disk = n
         if (LaunchProtocol.Check(request) is { } invalid) { return invalid; }
         var (settings, problem) = HostSettings.Load(profileFolder);
         if (problem is not null || settings.SectionProblems.Any()) { return "fleet launch settings cannot be read safely"; }
+        if (!settings.Agents.FleetLaunchEnabled) { return "fleet launch is off on this machine (agents.fleetLaunch.enabled in config.json, set by the owner)"; }
         var workspace = settings.Launch.Workspaces.SingleOrDefault(w => w.Label == request.Workspace);
         if (workspace is null) { return "fleet workspace is not listed on this machine"; }
         if (!settings.Agents.FleetWorkspaces.Contains(workspace.Label, StringComparer.Ordinal))

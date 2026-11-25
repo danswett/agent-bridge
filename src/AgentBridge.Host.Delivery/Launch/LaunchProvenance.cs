@@ -3,6 +3,9 @@ using AgentBridge.Host.Core;
 
 namespace AgentBridge.Host.Delivery.Launch;
 
+// The fleet route's admission limits: launches an hour and workers running at once (#2770).
+public readonly record struct FleetLimits(int PerHour, int Live);
+
 internal sealed class LaunchProvenance
 {
     const int MaxBytes = 4 * 1024 * 1024;
@@ -16,7 +19,12 @@ internal sealed class LaunchProvenance
     readonly HashSet<Guid> superseding = [];
     bool unavailable;
     // Role: the launch's own role name (a coordinator's role, #4318), kept so a later caller is judged by what was recorded, never by a name.
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null, DateTimeOffset? ReservedAt = null);
+
+    // How long a fleet reservation that never got a process counts against the caps: the longest follow window (a folder-trust question waits up to 30 minutes)
+    // plus 10 minutes. After it the row stays (so an unregistered process that is still running is never adoptable) but no longer counts, which is also how a restart
+    // frees a reservation its host crashed on. A proven failure releases it at once (ReleaseFleetReservation).
+    public static readonly TimeSpan FleetReservationLifetime = TimeSpan.FromMinutes(40);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -60,6 +68,42 @@ internal sealed class LaunchProvenance
             }
             origins[request] = new(session, null, grant, role);
             Save();
+        }
+    }
+
+    // A NEW fleet launch (never a resume) is admitted against the hourly and live caps and reserved in the SAME locked step, so two at once cannot both
+    // take the last slot, and the count is this durable record, so a restart cannot reset it. An unfinished reservation (no process yet) counts against both.
+    // Returns the refusal, or null when admitted and reserved (the same row Preparing writes). Coordinator and person launches are never counted.
+    public string? ReserveFleet(Guid request, string session, string? role, FleetLimits limits, DateTimeOffset now, Func<string, SessionProcess?> processOf)
+    {
+        if (limits.PerHour < 1 || limits.Live < 1) { throw new ArgumentOutOfRangeException(nameof(limits), "a fleet limit is at least 1"); }
+        lock (gate)
+        {
+            Check();
+            var fleet = origins.Where(e => e.Key != request && e.Value.Grant == "fleet" && (e.Value.Process is not null || e.Value.ReservedAt is { } reserved && now - reserved < FleetReservationLifetime))
+                .Select(e => e.Value).ToList();
+            var windowStart = now - TimeSpan.FromHours(1);
+            if (fleet.Count(o => o.Process?.StartedAt is not { } at || at > windowStart) >= limits.PerHour)
+            { return $"fleet launch limit: {limits.PerHour} an hour on this machine; the next slot opens when the oldest of them is an hour old (limits in force: {limits.PerHour} an hour, {limits.Live} live)"; }
+            if (fleet.Count(o => o.Process is null || o.Session.Length > 0 && processOf(o.Session) == o.Process) >= limits.Live)
+            { return $"fleet launch limit: {limits.Live} live fleet workers on this machine; one must end first (limits in force: {limits.PerHour} an hour, {limits.Live} live)"; }
+            origins[request] = new(session, null, "fleet", role, now);
+            Save();
+            return null;
+        }
+    }
+
+    // The worker is proven gone before its session registered (the launch failed): its reservation is released, so it stops counting at once. Only an unbound
+    // fleet reservation is released; a launch that has a process is never touched.
+    public bool ReleaseFleetReservation(Guid request)
+    {
+        lock (gate)
+        {
+            Check();
+            if (!origins.TryGetValue(request, out var origin) || origin.Grant != "fleet" || origin.Process is not null || origin.ReservedAt is null) { return false; }
+            origins.Remove(request);
+            Save();
+            return true;
         }
     }
 

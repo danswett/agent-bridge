@@ -147,6 +147,8 @@ public sealed class LaunchServiceOptions
     // Which folders live sessions work in, asked before a finished worktree is removed. Null
     // is "cannot tell", which removes none.
     public IWorktreeUsage? WorktreeUsage { get; init; }
+    // The fleet route's limits in force now (null: not readable, so a fleet launch is refused); read fresh for each launch (#2770).
+    public Func<FleetLimits?>? FleetAdmission { get; init; }
     public Func<WorkspaceConfig, WorktreeResult, string, string?>? AgentWorktreeCheck { get; init; }
     public Func<Guid, string, string, bool>? AgentWorktreeRefusalAudit { get; init; }
 
@@ -1346,8 +1348,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId, fleet ? "fleet" : null,
-                provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
+            if (fleet && !fleetResume)
+            {
+                // Atomic and durable: counted and reserved in the launch record's own lock (#2770).
+                if (options.FleetAdmission?.Invoke() is not { } fleetLimits) { return Refused("the fleet launch limits could not be read"); }
+                if (provenance.ReserveFleet(key, sessionId, provenance.RoleFor(plan.Role, agentPrincipal), fleetLimits, options.Time.GetUtcNow(), id => source.ProcessOf(id)) is { } full)
+                { return Refused(full); }
+            }
+            else
+            {
+                provenance.Preparing(key, sessionId, fleet ? "fleet" : null,
+                    provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
+            }
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)
@@ -1759,7 +1771,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Interlocked.Exchange(ref p.AuditRegistered, null)?.Invoke(id);
             RequestRegistered?.Invoke(p.Key, id);
         }
-        if (result.Outcome == LaunchOutcome.Failed) { RequestFailed?.Invoke(p.Key); }
+        if (result.Outcome == LaunchOutcome.Failed)
+        {
+            // A proven failure gives a fleet reservation back at once (a worker that exited before its session registered); a bound launch is not touched (#2770).
+            try { provenance.ReleaseFleetReservation(p.Key); } catch (InvalidOperationException) { /* the record is unavailable: the lifetime frees it */ }
+            RequestFailed?.Invoke(p.Key);
+        }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
             p.RegisteredLate = true;
