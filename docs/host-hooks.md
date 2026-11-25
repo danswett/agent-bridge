@@ -270,7 +270,8 @@ is one JSON value, prints the reply, logs the run and exits 0.
 
 | Hook | Reply |
 |---|---|
-| `claude/register`, `claude/stop`, `claude/ask`, `claude/notification`, `codex/hook` | nothing (their output would reach the model or change a decision) |
+| `claude/register`, `claude/stop`, `claude/ask`, `claude/notification`, `codex/hook` | nothing (their output would reach the model or change a decision), except the next row |
+| `claude/register` and `codex/hook`, for a `SessionStart` event only | the session guidance as `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"…"}}` (#674). The words are `SessionGuidance.Text`; they were a block Set up wrote into `CLAUDE.md` and `AGENTS.md`, and the owner objected to where they lived (Nov 24), so the person's own instruction files are no longer where this goes. Read from the event on stdin before replying, so it is given with the host up or down; `--fallback` replies before reading and never carries it. `UserPromptSubmit` and every other event stay silent. **Copilot has no equivalent yet:** GitHub documents `sessionStart` output as ignored, and its hook file has no such entry, so Copilot keeps its dedicated instruction file for now |
 | `copilot/ask_user` | `{"permissionDecision":"allow"}` |
 | `copilot/agent_stop`, `copilot/permission` | `{}` |
 

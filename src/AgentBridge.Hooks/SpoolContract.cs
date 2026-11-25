@@ -39,8 +39,9 @@ public static class SpoolContract
     // treated as stopped.
     public static readonly TimeSpan HeartbeatMaxAge = TimeSpan.FromSeconds(60);
 
-    // What each hook prints, which the agent reads. Claude and Codex hooks print nothing:
-    // their output would reach the model or change a decision. Copilot's ask_user reply lets
+    // What each hook prints, which the agent reads. Claude and Codex hooks print nothing, except
+    // the session guidance at SessionStart (Reply with the event's name): any other output would
+    // reach the model or change a decision. Copilot's ask_user reply lets
     // the tool run, so the native prompt is shown and stays answerable (invariant 3).
     static readonly Dictionary<string, string> Replies = new(StringComparer.Ordinal)
     {
@@ -57,6 +58,14 @@ public static class SpoolContract
     public static IEnumerable<string> Keys => Replies.Keys;
 
     public static string? Reply(string agent, string hook) => Replies.TryGetValue(agent + "/" + hook, out var reply) ? reply : null;
+
+    // The reply once the event's name is known. Only the hook that already runs at SessionStart
+    // (Claude's `register`, which also runs at UserPromptSubmit and so must stay silent there, and
+    // Codex's single `hook`) prints the session guidance, and only for SessionStart (#674).
+    public static string? Reply(string agent, string hook, string? hookEventName) =>
+        hookEventName == "SessionStart" && (agent, hook) is ("claude", "register") or ("codex", "hook")
+            ? SessionGuidance.StartReply()
+            : Reply(agent, hook);
 
     public static string SpoolDirectory(string runtimeRoot) => Path.Combine(runtimeRoot, SpoolFolder);
 

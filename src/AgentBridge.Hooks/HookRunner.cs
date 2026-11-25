@@ -94,6 +94,12 @@ public static class HookRunner
             // behind; the process ends without it.
             var wait = letThrough && env.LetThroughInputWait < env.InputWait ? env.LetThroughInputWait : env.InputWait;
             var (finished, utf8, whole) = ReadInput(stdin, wait);
+            // Before any branch below can reply, so the guidance is given whether or not a host is
+            // taking events. A --fallback run replies before it reads, and so never carries it.
+            if (finished && whole && agent is "claude" or "codex")
+            {
+                reply = SpoolContract.Reply(agent, hook, SpoolContract.CodexEvent(Trim(utf8)).Event) ?? reply;
+            }
 
             var (runtime, rootProblem) = RuntimeRoot(env.ExecutableDirectory);
             if (runtime is null)

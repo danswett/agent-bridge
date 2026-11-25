@@ -155,6 +155,17 @@ public sealed class StandaloneHooksTests : IDisposable
         _ => Path.Combine(Homes.Codex, "AGENTS.md"),
     };
 
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task The_block_Set_up_writes_holds_the_same_guidance_the_session_start_hook_gives(string agent)
+    {
+        await Setup.InstallAsync(agent, false, TextWriter.Null);
+
+        Assert.Contains(SessionGuidance.Text.ReplaceLineEndings("\n"), File.ReadAllText(Instructions(agent)).ReplaceLineEndings("\n"));
+    }
+
     [Fact]
     public async Task Cleanup_uses_saved_homes_and_leaves_unowned_agents_and_user_guidance_alone()
     {
