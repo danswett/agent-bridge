@@ -82,6 +82,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // read there (for that pass only), and what was last written to it.
     bool _restored;
     List<DiscoveredSession>? _remembered;
+    // The shells an earlier run judged older than the stale limit, by session, as the state file says: handed to each session's
+    // tracker when it is first made, so a restart does not start their watch again (#4571).
+    Dictionary<string, List<KeyValuePair<string, DateTimeOffset>>>? _agedMemory;
     readonly HashSet<string> _omitted = new(StringComparer.Ordinal); // overflowed; saved with its guard, which holds even undated
     string? _saved;
     string? _saveProblem;
@@ -514,7 +517,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         {
             Entry? entry;
             lock (_gate) { entry = replaced.Contains(discovered.Id) ? null : _entries.GetValueOrDefault(discovered.Id); }
-            var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time, _hostId);
+            var tracker = entry?.Tracker ?? NewTracker(discovered);
             // A restored session's boundary, before the transcript is read: what the interrupted run
             // left asking is set aside before the status and its times are worked out (#780).
             lock (_gate)
@@ -542,6 +545,27 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         if (unread.Count > 0) { (held, release) = (WithUnread(held, unread), true); }
         if (release) { SetHeld(held); }
         if (discover) { Save(); }
+    }
+
+    SessionTracker NewTracker(DiscoveredSession discovered)
+    {
+        var tracker = new SessionTracker(discovered, _options, _time, _hostId);
+        if (_agedMemory?.GetValueOrDefault(discovered.Id) is { } aged) { tracker.RestoreAgedShells(aged); }
+        return tracker;
+    }
+
+    // What the state file says an earlier run judged: capped and checked, since it is read back from disk. A list that is not
+    // one, or an entry that is not whole, is skipped.
+    static List<KeyValuePair<string, DateTimeOffset>> ReadAged(JsonElement list)
+    {
+        var aged = new List<KeyValuePair<string, DateTimeOffset>>();
+        foreach (var item in list.EnumerateArray())
+        {
+            if (aged.Count >= Parsing.BackgroundWork.KeepAged) { break; }
+            if (item.ValueKind != JsonValueKind.Object || Json.Str(item, "shell") is not { Length: > 0 and <= Parsing.BackgroundWork.MaxAgedId } shell || Json.Time(item, "mark") is not { } mark) { continue; }
+            aged.Add(new(shell, mark));
+        }
+        return aged;
     }
 
     static DiscoveryHeld WithUnread(DiscoveryHeld? held, List<AgentKind> unread, string? reason = null)
@@ -977,12 +1001,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             using var doc = JsonDocument.Parse(stream);
             if (Json.Arr(doc.RootElement, "sessions") is not { } list) { return []; }
             var sessions = new List<DiscoveredSession>();
+            _agedMemory = null;
             foreach (var e in list.EnumerateArray())
             {
                 var id = Json.Str(e, "id");
                 if (string.IsNullOrWhiteSpace(id) || RegistrationDiscovery.SafeKey(id) != id) { continue; }
                 var agent = Json.Str(e, "agent") switch { "copilot" => AgentKind.Copilot, "claude" => AgentKind.Claude, "codex" => AgentKind.Codex, _ => (AgentKind?)null };
                 if (agent is null) { continue; }
+                if (Json.Arr(e, "agedShells") is { } aged && ReadAged(aged) is { Count: > 0 } kept) { (_agedMemory ??= new(StringComparer.Ordinal))[id] = kept; }
                 sessions.Add(new DiscoveredSession(id, agent.Value, null, null, Json.Int(e, "pid"), ProcessStartedAt: Json.Time(e, "processStartedAt")));
                 if (_hostId is not null && Json.Bool(e, "omitted") == true) { _omitted.Add(id); }
             }
@@ -1003,8 +1029,16 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     {
         if (_options.StateFile is not { } path) { return; }
         List<DiscoveredSession> sessions;
-        lock (_gate) { sessions = [.. _entries.Values.Select(e => e.Tracker.Discovered)
-            .Concat(_hostId is null ? [] : _remembered ?? []).DistinctBy(d => d.Id).OrderBy(d => d.Id, StringComparer.Ordinal)]; }
+        Dictionary<string, List<KeyValuePair<string, DateTimeOffset>>> aged;
+        lock (_gate)
+        {
+            sessions = [.. _entries.Values.Select(e => e.Tracker.Discovered)
+                .Concat(_hostId is null ? [] : _remembered ?? []).DistinctBy(d => d.Id).OrderBy(d => d.Id, StringComparer.Ordinal)];
+            // The newest kept: what the next start reads is capped, and an old mark is the one least likely to matter.
+            aged = _entries.Values.Where(e => e.Tracker.AgedShells.Count > 0).ToDictionary(e => e.Tracker.Discovered.Id,
+                e => e.Tracker.AgedShells.Where(p => p.Key.Length <= Parsing.BackgroundWork.MaxAgedId).OrderByDescending(p => p.Value).ThenBy(p => p.Key, StringComparer.Ordinal)
+                    .Take(Parsing.BackgroundWork.KeepAged).ToList(), StringComparer.Ordinal);
+        }
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
         {
@@ -1018,6 +1052,18 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 if (d.ProcessId is { } pid) { w.WriteNumber("pid", pid); }
                 if (d.ProcessStartedAt is { } started) { w.WriteString("processStartedAt", started.ToString("o", CultureInfo.InvariantCulture)); }
                 if (_omitted.Contains(d.Id)) { w.WriteBoolean("omitted", true); }
+                if (aged.TryGetValue(d.Id, out var shells) && shells.Count > 0)
+                {
+                    w.WriteStartArray("agedShells");
+                    foreach (var (shell, mark) in shells)
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("shell", shell);
+                        w.WriteString("mark", mark.ToString("o", CultureInfo.InvariantCulture));
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                }
                 w.WriteEndObject();
             }
             w.WriteEndArray();

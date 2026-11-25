@@ -16,6 +16,7 @@
     <Project Path="src/AgentBridge.Protocol/AgentBridge.Protocol.csproj" />
     <Project Path="src/AgentBridge.Relay/AgentBridge.Relay.csproj" />
     <Project Path="src/AgentBridge.Roster/AgentBridge.Roster.csproj" />
+    <Project Path="src/AgentBridge.ScriptRun/AgentBridge.ScriptRun.csproj" />
     <Project Path="src/AgentBridge.Transport/AgentBridge.Transport.csproj" />
   </Folder>
   <Folder Name="/tools/">

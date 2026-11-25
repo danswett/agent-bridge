@@ -23,6 +23,7 @@
          the transport tests run, so this reuses both rather than copying them. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\src\AgentBridge.Host\AgentBridge.Host.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.ScriptRun\AgentBridge.ScriptRun.csproj" />
     <ProjectReference Include="..\AgentBridge.Transport.Tests\AgentBridge.Transport.Tests.csproj" />
     <Compile Include="..\AgentBridge.Host.Core.Tests\Fixture.cs" Link="Fixture.cs" />
     <!-- The shared protocol vectors' files (docs/protocol/vectors): this project writes the signed-command ones. -->
