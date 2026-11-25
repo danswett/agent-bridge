@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.App.Core;
@@ -1802,6 +1803,46 @@ public sealed class FleetTests : IAsyncLifetime
 public sealed class RelayFleetLinkTests
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(15);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task The_native_connection_subscribes_to_load_only_when_its_relay_host_offers_it(bool offersLoad)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        var requests = new ConcurrentQueue<string>();
+        host.Hub.JsonOptions = ProtocolJson.Options;
+        host.Hub.Handler = (_, op, _) =>
+        {
+            requests.Enqueue(op);
+            return Task.FromResult<object?>(op switch
+            {
+                Ops.Hello => new HelloResult(1, new MachineInfo(host.Id, "Build server", "windows", "0.1.0"),
+                    offersLoad ? [Capabilities.SessionsRead, Capabilities.Load] : [Capabilities.SessionsRead]),
+                "load.get" or "load.subscribe" => new MachineLoad { State = MachineLoadState.Unavailable },
+                Ops.SessionsSubscribe => new ChannelReply(new SubscribeResult(1, 0), async ch =>
+                {
+                    await ch.SendEventAsync(Events.SessionsSynced, new SessionsSynced(1));
+                }),
+                _ => null,
+            });
+        };
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), Product.DeviceName("Test PC"));
+        link.Start();
+        await Wait.UntilAsync(() => link.State == FleetState.Connected && link.Hosts.Any(h => h.Id == host.Id), "the relay host in presence", Patience);
+        await using var connection = new HostConnection(ct => link.OpenAsync(host.Id, ct), new LockedDispatcher());
+        connection.Start();
+
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the native connection's snapshot", Patience);
+
+        Assert.Contains(Ops.SessionsSubscribe, requests);
+        Assert.Equal(1L, connection.ConnectionNumber);
+        Assert.Equal(offersLoad ? 1 : 0, requests.Count(op => op == "load.subscribe"));
+        if (!offersLoad) { Assert.DoesNotContain("load.get", requests); }
+    }
 
     [Fact]
     [Trait("Category", "Network")]
