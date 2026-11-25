@@ -80,6 +80,27 @@ public sealed partial class MainViewModel
         return true;
     }
 
+    // Most recent's batches (#1858): activity moves rows together, five seconds apart at most, and
+    // not while the person points at a row, has focus in one, or types.
+    RecentBatch? recent;
+    DateTimeOffset? recentDue;
+    readonly HashSet<(SessionCardViewModel Card, RowHold Kind)> holds = [];
+
+    bool Held => holds.Any(h => Sessions.Contains(h.Card)) || Sessions.Any(c => c.Editing);
+
+    // The pointer is over a row, or focus is in it (a view's call, as the pointer and focus come and
+    // go). The last hold to end applies what waited, once five seconds have passed since the last batch.
+    public void Hold(SessionCardViewModel card, RowHold kind, bool on)
+    {
+        if (!(on ? holds.Add((card, kind)) : holds.Remove((card, kind)))) { return; }
+        if (!on) { Release(); }
+    }
+
+    void Release()
+    {
+        if (Order.Sort == SessionSort.Recent && !Held) { Rearrange(); }
+    }
+
     void Hook(SessionCardViewModel card)
     {
         card.Row = new RowActions(this, card);
@@ -87,7 +108,14 @@ public sealed partial class MainViewModel
         card.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(SessionCardViewModel.Question) && owner.ContainsKey(card)) { SyncNeedsYou(); }
+            if (e.PropertyName == nameof(SessionCardViewModel.Editing) && !card.Editing && owner.ContainsKey(card)) { Release(); }
         };
+    }
+
+    // Every second, from Tick: what waited for its five seconds moves.
+    void ReleaseRecent()
+    {
+        if (recentDue is { } due && Time.GetUtcNow() >= due) { Rearrange(); }
     }
 
     // The cards shown, in order, with the group headers, the dots and the Ended group. Rows move
@@ -97,9 +125,12 @@ public sealed partial class MainViewModel
     void Rearrange(bool chosen = false)
     {
         var sort = Order.Sort;
-        var a = Arranged();
+        // In Most recent the batches decide what moves while someone types: a row that arrives still does.
+        recent ??= new RecentBatch(Time);
+        var a = recent.Arrange(Arranged(), sort, Held, fresh: chosen);
+        recentDue = recent.Wait is { } wait ? Time.GetUtcNow() + wait : null;
         var want = a.Pinned.Concat(a.Sessions).Select(e => byId[e.Key]).ToList();
-        var hold = !chosen && Sessions.Any(c => c.Editing);
+        var hold = !chosen && sort != SessionSort.Recent && Sessions.Any(c => c.Editing);
         foreach (var gone in Sessions.Except(want).ToList()) { Sessions.Remove(gone); }
         for (var i = 0; i < want.Count; i++)
         {
@@ -111,8 +142,10 @@ public sealed partial class MainViewModel
         var pins = a.Pinned.Select(e => byId[e.Key]).ToHashSet();
         foreach (var c in want)
         {
-            c.Pinned = pins.Contains(c);
             var key = KeyOf(c);
+            // A row that moves keeps focus, as after a keyboard or menu move.
+            if (recent.Moved.Contains(key) && holds.Contains((c, RowHold.Focus))) { c.WantsRowFocus = true; }
+            c.Pinned = pins.Contains(c);
             // The row open in the session pane sees its news as it comes (ui.md §6.1, Unread).
             if (c == open) { Order.MarkSeen(key, c.Session.Activity?.ResponseTurn); }
             c.Unread = Order.Unread(key, c.Session.Activity?.ResponseTurn);
@@ -169,6 +202,9 @@ public sealed partial class MainViewModel
 
 public sealed record EndedRow(string Key, string Title, string Meta);
 
+// What holds Most recent still while it lasts (#1858); typing is the card's Editing.
+public enum RowHold { Pointer, Focus }
+
 // What a card's menu, keyboard and drag do to its place in the list (#164).
 public sealed class RowActions(MainViewModel main, SessionCardViewModel card)
 {
@@ -180,4 +216,5 @@ public sealed class RowActions(MainViewModel main, SessionCardViewModel card)
     public bool MoveDown() => main.Move(card, 1);
     public void TogglePin() => main.SetPinned(card, !card.Pinned);
     public bool Drop(string dragged, bool after) => main.Place(dragged, card, after);
+    public void Hold(RowHold kind, bool on) => main.Hold(card, kind, on);
 }

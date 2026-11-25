@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using AgentBridge.App.Core;
+using Microsoft.UI.Input;
 using Microsoft.UI.Text;
 using Windows.UI.Text;
 using Microsoft.UI.Xaml;
@@ -36,6 +37,11 @@ public sealed partial class SessionRow : UserControl
         Loaded += (_, _) => { if (parked) { Bindings.StopTracking(); } else { Attach(); } };
         Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
+        // Most recent holds still while the pointer is over a row or focus is in it (#1858).
+        PointerEntered += (_, e) => { if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch) { Card?.Row?.Hold(RowHold.Pointer, true); } };
+        PointerExited += (_, _) => Card?.Row?.Hold(RowHold.Pointer, false);
+        PointerCanceled += (_, _) => Card?.Row?.Hold(RowHold.Pointer, false);
+        PointerCaptureLost += (_, _) => Card?.Row?.Hold(RowHold.Pointer, false);
     }
 
     public SessionCardViewModel? Card
@@ -54,6 +60,7 @@ public sealed partial class SessionRow : UserControl
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
         if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; }
+        ReleaseHolds(old);
         if (card is not null)
         {
             if (attached) { card.PropertyChanged += OnCardChanged; }
@@ -102,6 +109,7 @@ public sealed partial class SessionRow : UserControl
         if (attached) { return; }
         attached = true;
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; }
+        WatchFocus();
         Bindings.Update();
         Settle();
         NameRow();
@@ -115,6 +123,8 @@ public sealed partial class SessionRow : UserControl
         if (!attached) { return; }
         attached = false;
         if (Card is { } c) { c.PropertyChanged -= OnCardChanged; }
+        UnwatchFocus();
+        ReleaseHolds(Card);
         Bindings.StopTracking();
     }
 
@@ -125,6 +135,47 @@ public sealed partial class SessionRow : UserControl
         if (all || e.PropertyName == nameof(SessionCardViewModel.Unread)) { ShowUnread(); }
         if (all || e.PropertyName is nameof(SessionCardViewModel.RowLabel) or nameof(SessionCardViewModel.Unread)) { NameRow(); }
         if (e.PropertyName == nameof(SessionCardViewModel.WantsRowFocus)) { TakeFocus(); }
+    }
+
+    // Keyboard focus sits on the list item that holds the row, not on the row: its focus, and its children', hold Most recent.
+    ListViewItem? watched;
+
+    void WatchFocus()
+    {
+        if (Container is not { } item || item == watched) { return; }
+        UnwatchFocus();
+        watched = item;
+        item.GotFocus += FocusIn;
+        item.LostFocus += FocusOut;
+    }
+
+    void UnwatchFocus()
+    {
+        if (watched is not { } item) { return; }
+        watched = null;
+        item.GotFocus -= FocusIn;
+        item.LostFocus -= FocusOut;
+    }
+
+    void FocusIn(object sender, RoutedEventArgs e) => Card?.Row?.Hold(RowHold.Focus, true);
+
+    // Focus moving between the row's own controls is not focus leaving it.
+    void FocusOut(object sender, RoutedEventArgs e)
+    {
+        if (FocusManager.GetFocusedElement(XamlRoot) is DependencyObject now && Within(now, watched)) { return; }
+        Card?.Row?.Hold(RowHold.Focus, false);
+    }
+
+    static bool Within(DependencyObject? node, DependencyObject? root)
+    {
+        for (; node is not null; node = VisualTreeHelper.GetParent(node)) { if (ReferenceEquals(node, root)) { return true; } }
+        return false;
+    }
+
+    static void ReleaseHolds(SessionCardViewModel? card)
+    {
+        card?.Row?.Hold(RowHold.Pointer, false);
+        card?.Row?.Hold(RowHold.Focus, false);
     }
 
     // The session updated while not open: the dot fades in. Opened: it fades out where it was.

@@ -324,7 +324,8 @@ public sealed partial class SessionCardViewModel : Observable
     public bool HistoryOpen { get; set; }
 
     // Someone is typing in this card (its reply or answer box has focus): the list holds still.
-    public bool Editing { get; set; }
+    public bool Editing { get => editing; set => Set(ref editing, value); }
+    bool editing;
 
     // Its place in the person's order (#164), set by MainViewModel: "Pinned" or "Sessions" over the
     // first card of each group once anything is pinned; whether it is pinned; and whether its
