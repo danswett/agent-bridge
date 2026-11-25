@@ -67,6 +67,11 @@ const adopt = (page, held) => ({
   ...(held.carried ? { carried: true, prompt: page.prompt ?? held.prompt, kind: page.kind ?? held.kind } : {}),
 });
 
+function nextLiveId(turnId, parts) {
+  let id = `${turnId}:live`;
+  for (let n = parts.length; parts.some((p) => p.id === id); n++) { id = `${turnId}:live${n}`; }
+  return id;
+}
 export class HistoryStore {
   #entries = new Map();
   #listeners = new Map();
@@ -574,9 +579,11 @@ export class HistoryStore {
       const held = turns[target].parts;
       const at = held.findLastIndex((p) => p.kind === 'response');
       const text = { text: voice.response, truncated: voice.responseTruncated };
+      // A reply with a responseRef different from the one this live part was made under is another reply (#4245); with no ref, or none kept, it is the one slot as before.
+      const ref = a.responseRef ? { ref: a.responseRef } : {};
       const parts = at >= 0 && !held[at].live && held[at].text === voice.response ? held
-        : at >= 0 && held[at].live ? held.map((p, k) => (k === at ? { ...p, ...text } : p))
-        : [...held, { id: `${turns[target].id}:live${held.filter((p) => p.live).length || ''}`, kind: 'response', live: true, ...text }];
+        : at >= 0 && held[at].live && (!a.responseRef || held[at].ref === undefined || held[at].ref === a.responseRef) ? held.map((p, k) => (k === at ? { ...p, ...text, ...ref } : p))
+        : [...held, { id: nextLiveId(turns[target].id, held), kind: 'response', live: true, ...text, ...ref }];
       if (!same(parts, held)) { turns[target] = { ...turns[target], parts: keepReplies(parts) }; changed = true; }
     }
     const finished = blocked || target >= 0 && (!mutable || !revised) && turns[target].parts.find((p) => p.id === a.responseId && p.at && !p.truncated);

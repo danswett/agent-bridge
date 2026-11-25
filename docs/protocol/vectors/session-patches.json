@@ -4099,7 +4099,8 @@
               "activity": {
                 "response": "Started both delegates and the background command; I will summarise when they finish.",
                 "responseTurn": "vVPp6iICyk4Dsv2Y",
-                "responseId": "jBlKJOpyPU7GlGWb.0"
+                "responseId": "jBlKJOpyPU7GlGWb.0",
+                "responseRef": "jBlKJOpyPU7GlGWb.0"
               },
               "class": "done"
             }
@@ -4123,6 +4124,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "jBlKJOpyPU7GlGWb.0",
+              "responseRef": "jBlKJOpyPU7GlGWb.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4211,6 +4213,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "jBlKJOpyPU7GlGWb.0",
+              "responseRef": "jBlKJOpyPU7GlGWb.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4307,6 +4310,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "jBlKJOpyPU7GlGWb.0",
+              "responseRef": "jBlKJOpyPU7GlGWb.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4363,7 +4367,8 @@
             "set": {
               "activity": {
                 "response": "The first delegate listed two files.",
-                "responseId": "8FIP-LAV9q1bmU3g.0"
+                "responseId": "8FIP-LAV9q1bmU3g.0",
+                "responseRef": "8FIP-LAV9q1bmU3g.0"
               }
             }
           },
@@ -4386,6 +4391,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "8FIP-LAV9q1bmU3g.0",
+              "responseRef": "8FIP-LAV9q1bmU3g.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4478,6 +4484,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "8FIP-LAV9q1bmU3g.0",
+              "responseRef": "8FIP-LAV9q1bmU3g.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4560,6 +4567,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "8FIP-LAV9q1bmU3g.0",
+              "responseRef": "8FIP-LAV9q1bmU3g.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4618,7 +4626,8 @@
             "set": {
               "activity": {
                 "response": "The nested delegate reported the latest commit.",
-                "responseId": "OAlfw3XyYSpSIBhY.0"
+                "responseId": "OAlfw3XyYSpSIBhY.0",
+                "responseRef": "OAlfw3XyYSpSIBhY.0"
               }
             }
           },
@@ -4641,6 +4650,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "OAlfw3XyYSpSIBhY.0",
+              "responseRef": "OAlfw3XyYSpSIBhY.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4723,6 +4733,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "OAlfw3XyYSpSIBhY.0",
+              "responseRef": "OAlfw3XyYSpSIBhY.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4778,7 +4789,8 @@
               "status": "idle",
               "activity": {
                 "response": "Both delegates finished: two files, and one commit.\nThe background command finished too.",
-                "responseId": "dqGYhzcIYcQgBlat.0"
+                "responseId": "dqGYhzcIYcQgBlat.0",
+                "responseRef": "dqGYhzcIYcQgBlat.0"
               },
               "class": "done"
             }
@@ -4801,6 +4813,7 @@
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "dqGYhzcIYcQgBlat.0",
+              "responseRef": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4879,6 +4892,7 @@
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "dqGYhzcIYcQgBlat.0",
+              "responseRef": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4980,6 +4994,7 @@
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "dqGYhzcIYcQgBlat.0",
+              "responseRef": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5082,6 +5097,7 @@
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
               "responseId": "dqGYhzcIYcQgBlat.0",
+              "responseRef": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5139,6 +5155,7 @@
                 "response": "You picked beta.",
                 "responseTurn": "R89XN4O1WwEWPHOW",
                 "responseId": "bd9LyYxKUDpZCJnG.0",
+                "responseRef": "bd9LyYxKUDpZCJnG.0",
                 "turnCount": 2
               },
               "class": "done"
@@ -5162,6 +5179,7 @@
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "R89XN4O1WwEWPHOW",
               "responseId": "bd9LyYxKUDpZCJnG.0",
+              "responseRef": "bd9LyYxKUDpZCJnG.0",
               "turnCount": 2,
               "compactions": 0
             },

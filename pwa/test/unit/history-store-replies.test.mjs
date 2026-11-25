@@ -59,6 +59,60 @@ test('id-less streaming updates stay in one part', async (t) => {
   assert.equal(currentReply(store.get('h', ID), last), 'Partial answer');
 });
 
+// #4245 (#2667, #3649): the host sends no id for a reply it cannot identify, so two such replies in a row were one live slot and the second rewrote the
+// first. responseRef is the host saying, not the text, whether a reply is a new one; used only when present, so an older host behaves as before.
+const sayRef = (responseId, response, responseRef) => readSession({
+  id: ID, agent: 'claude', activity: { turn: turn(6), responseTurn: turn(6), ...(responseId ? { responseId } : {}), ...(responseRef ? { responseRef } : {}), response, userMessage: 'Question' },
+});
+
+test('with a response ref two id-less replies are two parts, and the second still grows in place', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef(null, 'First reply.', 'r1'));
+  store.live('h', sayRef(null, 'Second reply, after the tools.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply, after the tools.']);
+  store.live('h', sayRef(null, 'Second reply, after the tools. And a little more.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply, after the tools. And a little more.']);
+  assert.equal(new Set(shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.id)).size, 2);
+});
+
+// #4333 review P1: the same words with a different ref are two replies on both clients (the Windows client used to restate a live part by its words).
+test('two id-less replies with the same words and different refs are two parts, and the same ref is one', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef(null, 'Done.', 'r1'));
+  store.live('h', sayRef(null, 'Done.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['Done.', 'Done.']);
+  store.live('h', sayRef(null, 'Done.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['Done.', 'Done.']);
+});
+test('without a response ref an id-less reply is the legacy single slot, as before', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef(null, 'Partial'));
+  store.live('h', sayRef(null, 'Complete answer'));
+  assert.deepEqual(replyTexts(store), ['Complete answer']);
+});
+
+test('a response ref changes nothing for a reply that has an id', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef('a', 'one', 'r1'));
+  store.live('h', sayRef('a', 'one two', 'r2'));
+  assert.deepEqual(replyTexts(store), ['one two']);
+  store.live('h', sayRef('b', 'Another', 'r2'));
+  assert.deepEqual(replyTexts(store), ['one two', 'Another']);
+});
+
+test('a live part seen without a ref is updated by the first reply that has one, and then a new ref is a new part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef(null, 'First reply, as an older host said it.'));
+  store.live('h', sayRef(null, 'First reply, as an older host said it. More.', 'r1'));
+  assert.deepEqual(replyTexts(store), ['First reply, as an older host said it. More.']);
+  store.live('h', sayRef(null, 'A different reply.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['First reply, as an older host said it. More.', 'A different reply.']);
+});
 test('the same id updates one part', async (t) => {
   const { store } = await setup(t);
   await store.open('h', ID);
