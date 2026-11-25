@@ -17,6 +17,86 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Get-EfficiencyMemoryVerdict {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable] $Run,
+        [hashtable] $Rerun,
+        [Parameter(Mandatory)][ValidateScript({ [double]::IsFinite($_) -and $_ -ge 0 })][double] $GrowthCeilingBytes,
+        [Parameter(Mandatory)][ValidateScript({ [double]::IsFinite($_) -and $_ -ge 0 })][double] $SteadyPrivateCeilingBytes,
+        [Parameter(Mandatory)][ValidateScript({ [double]::IsFinite($_) -and $_ -ge 0 })][double] $SteadyWorkingSetCeilingBytes,
+        [ValidateScript({ [double]::IsFinite($_) -and $_ -ge 0 })][double] $Margin = 0.25
+    )
+    function Measure-MemoryRun([hashtable] $Phase) {
+        foreach ($identity in 'processIdentity', 'controlIdentity') {
+            if ($Phase[$identity] -isnot [string] -or [string]::IsNullOrWhiteSpace($Phase[$identity])) {
+                return @{ reason = 'identity' }
+            }
+        }
+        if ($null -eq $Phase['samples'] -or @($Phase['samples']).Count -ne 10) { return @{ reason = 'samples' } }
+        foreach ($sample in $Phase.samples) {
+            if ($sample -isnot [hashtable]) { return @{ reason = 'samples' } }
+            foreach ($metric in 'privateBytes', 'workingSetBytes', 'controlPrivateBytes') {
+                $value = $sample[$metric]
+                if ($null -eq $value -or
+                    [Type]::GetTypeCode($value.GetType()).ToString() -notin @(
+                        'Byte', 'SByte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Single', 'Double', 'Decimal'
+                    ) -or -not [double]::IsFinite([double]$value) -or $value -lt 0) {
+                    return @{ reason = 'samples' }
+                }
+            }
+        }
+        $control = @($Phase.samples | ForEach-Object { [double]$_.controlPrivateBytes } | Sort-Object)
+        if ($control[-1] - $control[0] -gt 1MB) { return @{ reason = 'control' } }
+        $first = @($Phase.samples[0..2] | ForEach-Object { [double]$_.privateBytes } | Sort-Object)
+        $last = @($Phase.samples[7..9] | ForEach-Object { [double]$_.privateBytes } | Sort-Object)
+        $workingSet = @($Phase.samples[7..9] | ForEach-Object { [double]$_.workingSetBytes } | Sort-Object)
+        return @{
+            reason = ''; growthBytes = $last[1] - $first[1]
+            steadyPrivateBytes = $last[1]; steadyWorkingSetBytes = $workingSet[1]
+        }
+    }
+    $result = @{
+        verdict = 'not measured'; reason = ''; rerunUsed = $false; needsRerun = $false
+        growthBytes = $null; steadyPrivateBytes = $null; steadyWorkingSetBytes = $null
+    }
+    $phases = @($Run)
+    if ($null -ne $Rerun) { $phases += $Rerun }
+    for ($i = 0; $i -lt $phases.Count; $i++) {
+        $result.rerunUsed = $i -eq 1
+        $result.needsRerun = $false
+        $result.growthBytes = $null; $result.steadyPrivateBytes = $null; $result.steadyWorkingSetBytes = $null
+        if ($i -eq 1 -and ($Run['processIdentity'] -cne $Rerun['processIdentity'] -or
+                $Run['controlIdentity'] -cne $Rerun['controlIdentity'])) {
+            $result.reason = 'identity'
+            return $result
+        }
+        $measured = Measure-MemoryRun $phases[$i]
+        if ($measured.reason) {
+            $result.reason = $measured.reason
+            $result.needsRerun = $i -eq 0
+            continue
+        }
+        foreach ($metric in 'growthBytes', 'steadyPrivateBytes', 'steadyWorkingSetBytes') { $result[$metric] = $measured[$metric] }
+        $growth = $measured.growthBytes -gt $GrowthCeilingBytes
+        $steady = $measured.steadyPrivateBytes -gt $SteadyPrivateCeilingBytes * (1 + $Margin) -or
+            $measured.steadyWorkingSetBytes -gt $SteadyWorkingSetCeilingBytes * (1 + $Margin)
+        $result.needsRerun = $false
+        if ($measured.growthBytes -gt 10 * $GrowthCeilingBytes -or ($i -eq 1 -and ($growth -or $steady))) {
+            $result.verdict = 'fail'; $result.reason = if ($growth) { 'growth' } else { 'steady' }
+            return $result
+        }
+        if (-not $growth -and -not $steady) {
+            $result.verdict = 'pass'; $result.reason = 'within ceilings'
+            return $result
+        }
+        $result.reason = 'rerun required'; $result.needsRerun = $true
+    }
+    # An invalid retry must not leave the first run's measurements looking authoritative.
+    $result.growthBytes = $null; $result.steadyPrivateBytes = $null; $result.steadyWorkingSetBytes = $null
+    return $result
+}
+
 function Get-EfficiencySnapshot([int] $ProcessId) {
     $process = $null
     try {

@@ -5,6 +5,29 @@ namespace AgentBridge.Quality.Tests;
 [Trait("Category", "Process")]
 public class EfficiencyBaselineTests
 {
+    [Fact]
+    public Task Memory_verdict_fails_when_growth_stays_over_its_ceiling_through_the_rerun() =>
+        The_baseline_contract_holds_for_each_fixture("memory-growth");
+
+    [Fact]
+    public Task Memory_verdict_passes_when_a_one_time_cache_stops_growing_in_the_rerun() =>
+        The_baseline_contract_holds_for_each_fixture("memory-cache");
+
+    [Fact]
+    public Task Memory_verdict_reports_not_measured_when_the_control_moves() =>
+        The_baseline_contract_holds_for_each_fixture("memory-control");
+
+    [Theory]
+    [InlineData("memory-spin")]
+    [InlineData("memory-steady")]
+    [InlineData("memory-boundary")]
+    [InlineData("memory-missing")]
+    [InlineData("memory-replacement")]
+    [InlineData("memory-retry")]
+    [InlineData("memory-invalid")]
+    public Task Memory_verdict_honours_recorded_sample_boundaries(string scenario) =>
+        The_baseline_contract_holds_for_each_fixture(scenario);
+
     [Theory]
     [InlineData("elapsed")]
     [InlineData("exit")]
