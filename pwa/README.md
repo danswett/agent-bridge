@@ -479,6 +479,8 @@ not sent, the files stay, and Send starts over); a blob already sealed for a rep
 not go is reused, so only what is missing is sent again. A relay refusal (over the daily
 allowance, too many at once, too large) says so in words and keeps the file in the box.
 Small files keep to the channel even then: nothing is stored, and nothing extra can fail.
+The host's 100 MiB limit also caps an advertised larger limit. If the relay's limit falls
+after a file was picked, Send reports the new limit before requesting an upload.
 
 Without the blob store, each file is at most 256 KiB. An image over that, as most phone
 photos and screenshots are, is redrawn as a JPEG at most 2048 px on a side, then smaller,
