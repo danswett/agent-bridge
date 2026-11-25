@@ -85,7 +85,7 @@ public sealed class BusyQueueStoreTests
         var s = Store(); var r = Req();
         Assert.Null(s.Holder("sess1"));
         s.TryBegin(r, "p", "sess1"); s.Track(r, "/t/a.jsonl", 42);
-        Assert.Equal(new BusyQueueStore.Holding(r, "/t/a.jsonl", 42, "p"), s.Holder("sess1"));
+        Assert.Equal(new BusyQueueStore.Holding(r, "/t/a.jsonl", 42, null, "p"), s.Holder("sess1"));
         Assert.Null(s.Holder("sess2"));
         s.KeysWent(r); s.Settle(r, BusyQueueStore.Queued, null, held: true);
         Assert.Equal(r, s.Holder("sess1")!.Request);

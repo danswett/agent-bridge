@@ -25,7 +25,7 @@ public sealed class BusyQueueStore(TimeProvider time)
     // The slot: session id -> the key (peer + request) that claims it.
     readonly Dictionary<string, string> slots = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> sessionOf = new(StringComparer.Ordinal);
-    readonly Dictionary<string, (string? Transcript, long Offset)> tracked = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (string? Transcript, long Offset, DateTimeOffset? ProcessStart)> tracked = new(StringComparer.Ordinal);
 
     static string KeyOf(string principal, string request) => principal + '\u001f' + request;
 
@@ -99,16 +99,16 @@ public sealed class BusyQueueStore(TimeProvider time)
         lock (gate) { return Find(request, principal) is { } key ? records[key] : null; }
     }
 
-    public sealed record Holding(string Request, string? Transcript, long Offset, string? Principal = null);
+    public sealed record Holding(string Request, string? Transcript, long Offset, DateTimeOffset? ProcessStart = null, string? Principal = null);
     // Where a held send's transcript stands: the file and the offset it had when the send began, so a prompt Claude takes later can be found.
-    public void Track(string request, string? transcript, long offset, string? principal = null)
+    public void Track(string request, string? transcript, long offset, DateTimeOffset? processStart = null, string? principal = null)
     {
-        lock (gate) { if (Find(request, principal) is { } key) { tracked[key] = (transcript, offset); } }
+        lock (gate) { if (Find(request, principal) is { } key) { tracked[key] = (transcript, offset, processStart); } }
     }
 
     public (string? Transcript, long Offset) Tracking(string request, string? principal = null)
     {
-        lock (gate) { return Find(request, principal) is { } key && tracked.TryGetValue(key, out var where) ? where : default; }
+        lock (gate) { return Find(request, principal) is { } key && tracked.TryGetValue(key, out var where) ? (where.Transcript, where.Offset) : default; }
     }
 
     public Holding? Holder(string session)
@@ -117,7 +117,7 @@ public sealed class BusyQueueStore(TimeProvider time)
         {
             if (!slots.TryGetValue(session, out var key) || !records.TryGetValue(key, out var held)) { return null; }
             tracked.TryGetValue(key, out var where);
-            return new Holding(held.Request, where.Transcript, where.Offset, held.Principal);
+            return new Holding(held.Request, where.Transcript, where.Offset, where.ProcessStart, held.Principal);
         }
     }
 

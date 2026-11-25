@@ -64,4 +64,35 @@ public sealed class ClaudeQueueTests : IDisposable
         Append("not json at all", "{\"type\":\"user\"");
         Assert.False(ClaudeQueue.Taken(path, 0, Req));
     }
+
+    // D2b-2c: the slot a host restart forgot. A relay prompt enqueued since the Claude process started and not taken since still holds it.
+    static string EnqueueAt(string request, string at) => Line(new { type = "queue-operation", operation = "enqueue", timestamp = at, content = Frame(request) });
+    static readonly DateTimeOffset Since = DateTimeOffset.Parse("2026-11-23T10:00:00Z");
+
+    [Fact]
+    public void A_relay_prompt_enqueued_since_the_process_started_and_not_taken_is_unconsumed_until_it_is_taken()
+    {
+        Append(EnqueueAt(Req, "2026-11-23T10:05:00.000Z"));
+        Assert.True(ClaudeQueue.Unconsumed(path, Since));
+        Append(QueuedTaken(Req));
+        Assert.False(ClaudeQueue.Unconsumed(path, Since));
+    }
+
+    [Fact]
+    public void Rows_older_than_the_process_a_persons_own_enqueue_and_a_missing_transcript_are_not_unconsumed_but_a_row_with_no_time_is()
+    {
+        Append(EnqueueAt(Req, "2026-11-23T09:00:00.000Z"));
+        Append(Line(new { type = "queue-operation", operation = "enqueue", timestamp = "2026-11-23T10:30:00.000Z", content = "please also add tests" }));
+        Assert.False(ClaudeQueue.Unconsumed(path, Since));
+        Assert.False(ClaudeQueue.Unconsumed(path + ".none", Since));
+        Append(Line(new { type = "queue-operation", operation = "enqueue", content = Frame("33333333-3333-3333-3333-333333333333") }));
+        Assert.True(ClaudeQueue.Unconsumed(path, Since));   // no timestamp: held, the safe side
+    }
+
+    [Fact]
+    public void A_prompt_typed_while_idle_or_taken_for_another_request_does_not_clear_an_unconsumed_one()
+    {
+        Append(EnqueueAt(Req, "2026-11-23T10:05:00.000Z"), IdlePrompt("22222222-2222-2222-2222-222222222222"), QueuedTaken("44444444-4444-4444-4444-444444444444"));
+        Assert.True(ClaudeQueue.Unconsumed(path, Since));
+    }
 }
