@@ -23,17 +23,20 @@ public class CiNuGetMirrorTests
             ? list.Children.OfType<YamlMappingNode>().ToList() : [];
 
     [Fact]
-    public void Only_a_self_hosted_product_step_reads_the_runners_mirror_and_it_writes_the_tested_config()
+    public void Only_a_self_hosted_product_or_app_step_reads_the_runners_mirror_and_it_writes_the_tested_config()
     {
         var readers = Jobs().Children
             .SelectMany(job => Steps((YamlMappingNode)job.Value).Select(step => (Job: ((YamlScalarNode)job.Key).Value, Step: step)))
             .Where(s => (Scalar(s.Step, "run") ?? "").Contains("AGENT_BRIDGE_NUGET_SOURCE", StringComparison.Ordinal))
             .ToList();
 
-        var (job, step) = Assert.Single(readers);
-        Assert.Equal("product", job);
-        Assert.Equal("runner.environment == 'self-hosted'", Scalar(step, "if"));
-        Assert.Contains("New-AbCiNuGetConfig", Scalar(step, "run"), StringComparison.Ordinal);
+        // product, and app (win-x64) once it may take the pool (#4104): publish and vpk restore through the same mirror config.
+        Assert.Equal(["app", "product"], readers.Select(r => r.Job).Order(StringComparer.Ordinal));
+        foreach (var (_, step) in readers)
+        {
+            Assert.Equal("runner.environment == 'self-hosted'", Scalar(step, "if"));
+            Assert.Contains("New-AbCiNuGetConfig", Scalar(step, "run"), StringComparison.Ordinal);
+        }
     }
 
     [Fact]

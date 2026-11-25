@@ -28,7 +28,7 @@ public class FullWorkflowTests
     [Fact]
     public void Full_yml_has_the_trigger_job_the_spikes_pwa_e2e_and_the_gate_and_ci_yml_no_longer_has_them()
     {
-        Assert.Equal(["full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+        Assert.Equal(["app-self-test", "full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
     }
 
@@ -196,21 +196,31 @@ public class FullWorkflowTests
     [Fact]
     public void The_trigger_takes_a_workflow_runs_commit_only_from_the_API_read_of_a_push_to_main_and_a_run_by_hand_the_tip_it_runs_on()
     {
-        var push = RunCommitStep("workflow_run", Tip, $"{RunSha}\tmain\tpush");
-        var elsewhere = RunCommitStep("workflow_run", Tip, $"{RunSha}\ttopic\tpush");
-        var pull = RunCommitStep("workflow_run", Tip, $"{RunSha}\tmain\tpull_request");
-        var garbage = RunCommitStep("workflow_run", Tip, "not-a-sha\tmain\tpush");
+        // The API row is head_sha, head_branch, event and the CI run's number (the app's version, 0.1.<number>, #4104).
+        var push = RunCommitStep("workflow_run", Tip, $"{RunSha}\tmain\tpush\t77");
+        var elsewhere = RunCommitStep("workflow_run", Tip, $"{RunSha}\ttopic\tpush\t77");
+        var pull = RunCommitStep("workflow_run", Tip, $"{RunSha}\tmain\tpull_request\t77");
+        var garbage = RunCommitStep("workflow_run", Tip, "not-a-sha\tmain\tpush\t77");
+        var noNumber = RunCommitStep("workflow_run", Tip, $"{RunSha}\tmain\tpush\tx");
         var unreadable = RunCommitStep("workflow_run", Tip, ghFails: true);
-        var byHand = RunCommitStep("workflow_dispatch", Tip);
+        // By hand: the tip it runs on, and the newest green push run of CI on that commit (id, number); none is a failure.
+        var byHand = RunCommitStep("workflow_dispatch", Tip, "9001\t77");
+        var noGreenRun = RunCommitStep("workflow_dispatch", Tip);
         var badTip = RunCommitStep("workflow_dispatch", "main");
 
         Assert.Equal(0, push.Code);
         Assert.Contains($"tested={RunSha}", push.Output, StringComparison.Ordinal);
-        Assert.All(new[] { elsewhere, pull, garbage, unreadable }, r => { Assert.NotEqual(0, r.Code); Assert.DoesNotContain("tested=", r.Output, StringComparison.Ordinal); });
+        Assert.Contains("ci-run-id=4242", push.Output, StringComparison.Ordinal);
+        Assert.Contains("ci-run-number=77", push.Output, StringComparison.Ordinal);
+        Assert.All(new[] { elsewhere, pull, garbage, noNumber, unreadable, noGreenRun }, r => { Assert.NotEqual(0, r.Code); Assert.DoesNotContain("tested=", r.Output, StringComparison.Ordinal); });
         Assert.Equal(0, byHand.Code);
         Assert.Contains($"tested={Tip}", byHand.Output, StringComparison.Ordinal);
-        Assert.Equal("", byHand.Log); // a run by hand makes no API call at all: nothing to follow
+        Assert.Contains("ci-run-id=9001", byHand.Output, StringComparison.Ordinal);
+        Assert.Contains("ci-run-number=77", byHand.Output, StringComparison.Ordinal);
+        // One call, a list of CI's green push runs on the tip it runs on: no input and nothing typed names a commit.
+        Assert.Equal($"gh api repos/danswett/agent-bridge/actions/workflows/ci.yml/runs?head_sha={Tip}&branch=main&event=push&status=success&per_page=1", byHand.Log.Trim().Split(" --jq ")[0]);
         Assert.NotEqual(0, badTip.Code);
+        Assert.Equal("", badTip.Log); // a tip that isn't 40 hex is refused before any API call
     }
     /// <summary>
     /// full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test. A cache written there could be poisoned by that code

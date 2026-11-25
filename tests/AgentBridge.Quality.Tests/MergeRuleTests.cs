@@ -2727,9 +2727,12 @@ public class MergeRuleTests
             var expanded = new List<string>();
             if (!job.Children.TryGetValue(new YamlScalarNode("strategy"), out var strategy))
             {
-                if (job.Children.TryGetValue(new YamlScalarNode("name"), out var display))
-                    Assert.Contains($"'{group.Key}'", ((YamlScalarNode)display).Value!, StringComparison.Ordinal);
-                expanded.Add(group.Key);
+                var shown = job.Children.TryGetValue(new YamlScalarNode("name"), out var display) ? ((YamlScalarNode)display).Value! : null;
+                // A display name that is an expression holds the job's name as a literal; a plain one (app-self-test (win-x64), #4104) IS the name.
+                var plain = shown is not null && !shown.Contains("${{", StringComparison.Ordinal);
+                if (shown is not null && !plain)
+                    Assert.Contains($"'{group.Key}'", shown, StringComparison.Ordinal);
+                expanded.Add(plain ? shown! : group.Key);
             }
             else
             {
