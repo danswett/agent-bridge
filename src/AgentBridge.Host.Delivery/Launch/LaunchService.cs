@@ -1371,6 +1371,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 }
             }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
+            // #3644: the worktree check passes Codex, and a grant's launch or an agent's has no fleet flag. None may start a Codex
+            // with no worker credential, whatever permissions it asks.
+            if (agentPrincipal is not null && plan.Launcher.Kind == AgentKind.Codex && !credentialIssued)
+            { provenance.Abandon(key); return Refused("a Codex worker credential could not be issued"); }
             Started started;
             try { started = starter.Start(spec); created = null; }
             catch (Exception e)
