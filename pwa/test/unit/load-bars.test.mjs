@@ -5,7 +5,7 @@ import { loadBars } from '../../js/load-bars.js';
 const sample = (extra = {}) => ({
   state: 'fresh', ageMs: 2000, staleAfterMs: 15000,
   cpu: { percent: 37.5, cores: 8 },
-  memory: { totalBytes: 32 * 1024 ** 3, availableBytes: 8 * 1024 ** 3, committedPercent: 92 },
+  memory: { totalBytes: 32 * 1024 ** 3, availableBytes: 8 * 1024 ** 3, committedPercent: 92, usedPercent: 75 },
   ...extra,
 });
 const noFigures = (v) => {
@@ -14,6 +14,39 @@ const noFigures = (v) => {
   assert.equal(v.cpu.text, 'no figure');
   assert.equal(v.memory.text, 'no figure');
 };
+
+test('memory uses only the full-precision host percentage, including real zero and one hundred', () => {
+  for (const [usedPercent, availableBytes, text] of [[25.3456789012345, 25, '25%'], [62.5, 25, '63%'], [0, 100, '0%'], [100, 0, '100%']]) {
+    const v = loadBars(sample({ memory: { totalBytes: 100, availableBytes, committedPercent: 92, usedPercent } }));
+    assert.equal(v.memory.percent, usedPercent);
+    assert.equal(v.memory.text, text);
+    assert.equal(v.cpu.percent, 37.5);
+  }
+});
+
+test('a missing or invalid memory figure never becomes a byte ratio, committed figure or zero', () => {
+  for (const usedPercent of [undefined, null, NaN, Infinity, -Infinity, -0.1, 100.1, '0']) {
+    const memory = { totalBytes: 100, availableBytes: 25, committedPercent: 92,
+      ...(usedPercent === undefined ? {} : { usedPercent }) };
+    const v = loadBars(sample({ memory }));
+    assert.equal(v.memory.percent, null);
+    assert.equal(v.state, 'partial');
+    assert.equal(v.cpu.percent, 37.5);
+  }
+});
+
+test('the host age limit fails closed while an in-age CPU survives an absent memory figure', () => {
+  for (const state of ['fresh', 'partial']) {
+    for (const [ageMs, expected] of [[15000, 'partial'], [20000, 'stale']]) {
+      const v = loadBars(sample({ state, ageMs, cpu: { percent: 37.543 }, memory: undefined }));
+      assert.equal(v.state, expected);
+      assert.equal(v.word, expected === 'stale' ? 'Stale' : 'Partial');
+      assert.equal(v.ageMs, ageMs);
+      assert.equal(v.cpu.percent, expected === 'stale' ? null : 37.543);
+      assert.equal(v.memory.percent, null);
+    }
+  }
+});
 
 test('bars show the exact whole-machine CPU and used memory share, not committed memory', () => {
   const v = loadBars(sample());
@@ -40,7 +73,7 @@ test('a partial sample keeps measured memory but a missing CPU is no figure, nev
 });
 
 test('measured zero CPU and completely free memory remain real zero figures', () => {
-  const v = loadBars(sample({ cpu: { percent: 0 }, memory: { totalBytes: 100, availableBytes: 100 } }));
+  const v = loadBars(sample({ cpu: { percent: 0 }, memory: { totalBytes: 100, availableBytes: 100, usedPercent: 0 } }));
   assert.equal(v.cpu.percent, 0);
   assert.equal(v.cpu.text, '0%');
   assert.equal(v.memory.percent, 0);

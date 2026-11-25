@@ -7,6 +7,24 @@ const records = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/
 const full = () => structuredClone(records.MachineLoad.valid.find((v) => v.name === 'full').json);
 const overCap = () => records.MachineLoad.valid.find((v) => v.json.sessions?.length === 201);
 
+test('complete load readers retain the optional host memory figure without rounding or deriving it', () => {
+  for (const [key, usedPercent] of [['usedPercent', 25.3456789012345], ['UsEdPeRcEnT', 0], ['usedPercent', 100]]) {
+    const availableBytes = usedPercent === 0 ? 100 : usedPercent === 100 ? 0 : 25;
+    const memory = { totalBytes: 100, availableBytes, committedPercent: 92, [key]: usedPercent };
+    const expected = { totalBytes: 100, availableBytes, committedPercent: 92, usedPercent };
+    assert.deepEqual(readers.readMachineLoadMemory(memory), expected);
+    const raw = { state: 'fresh', ageMs: 20000, staleAfterMs: 15000, cpu: { percent: 37.543 }, memory };
+    assert.deepEqual(readers.readMachineLoad(raw), { ...raw, memory: expected, sessions: [] });
+  }
+});
+
+test('complete memory decoding omits missing and unreadable host figures, never fabricating zero', () => {
+  for (const usedPercent of [undefined, null, NaN, Infinity, -Infinity, '0', {}]) {
+    const memory = { totalBytes: 100, availableBytes: 25, usedPercent };
+    assert.deepEqual(readers.readMachineLoadMemory(memory), { totalBytes: 100, availableBytes: 25 });
+  }
+});
+
 for (const name of ['mixed-case-names', 'offset-submillisecond-sampled-at']) {
   test(`the shared ${name} MachineLoad vector reads exactly as C# does`, () => {
     const vector = records.MachineLoad.valid.find((v) => v.name === name);
