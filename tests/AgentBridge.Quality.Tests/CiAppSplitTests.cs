@@ -157,6 +157,8 @@ public sealed class CiAppSplitTests
     [InlineData("src/AgentBridge.App.Core/Cards.cs", true, true)]
     [InlineData("src/AgentBridge.Host.Core/SessionDrivers.cs", true, true)]
     [InlineData("build/app-self-test.ps1", true, true)]
+    // The app's own unit tests: Quality's call (#4104), they exercise the app's code, so the pull request that changes them runs the self-test too.
+    [InlineData("tests/AgentBridge.App.Tests/AppTimingsTests.cs", true, true)]
     // The host alone is packed and attested, but is not the app's own file: no desktop self-test on a pull request (main still runs it in FULL).
     [InlineData("src/AgentBridge.Host/Program.cs", false, true)]
     [InlineData("docs/status.md", false, false)]

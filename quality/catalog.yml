@@ -793,7 +793,7 @@ suites:
     # src/** is not a trigger (#1249): the app's folder and what it builds from (builds), the other
     # projects pack-app.ps1 publishes, and the packaging inputs are. app-package-host adds the
     # host's own closure.
-    triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
+    triggers: [src/AgentBridge.App/**, tests/AgentBridge.App.Tests/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
     command: see ci.yml app, app-sbom, app-self-test and app-installer jobs
     # app (win-x64) is the build, pack and identity check; app-self-test (win-x64) is its desktop self-test, hosted, on the
     # publish folder app uploaded, and runs only when THIS suite is selected, so a pull request that leaves the app's own
