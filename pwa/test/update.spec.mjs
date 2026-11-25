@@ -102,6 +102,51 @@ const sheetOf = (page) => page.locator('dialog.update-now-sheet');
 const setUpdate = (page, change) => page.evaluate((c) => window.agentBridgeDemo.setUpdate({ ...window.agentBridgeDemo.host.update, ...c }), change);
 const QUIET = { busy: { working: 0, waiting: 0 } };
 
+test('the restart cap keeps Update usable and sends Update when idle without a confirmation', async ({ page }) => {
+  await openDemo(page, '&updateNow=1');
+  await setUpdate(page, { canUpdateNow: false, updateNowWhy: 'restart-cap' });
+  const block = updateOf(page);
+  const update = block.getByRole('button', { name: /^Update/ });
+
+  await expect(update).toBeEnabled();
+  await update.click();
+
+  await expect(sheetOf(page)).toHaveCount(0);
+  await expect(rowOf(page)).toContainText(/updates when its sessions are quiet/i);
+  const log = await page.evaluate(() => window.agentBridgeDemo.updateLog);
+  expect(log).toHaveLength(1);
+  expect(log[0].op).toBe('update.install');
+  expect(log[0].now).not.toBe(true);
+});
+
+test('a failed download offers Try again now and sends one install press', async ({ page }) => {
+  await openDemo(page);
+  await setUpdate(page, { last: { outcome: 'failed', step: 'downloading', at: new Date().toISOString() } });
+  const retry = updateOf(page).getByRole('button', { name: 'Try again now', exact: true });
+
+  await expect(retry).toBeEnabled();
+  await retry.click();
+
+  const log = await page.evaluate(() => window.agentBridgeDemo.updateLog);
+  expect(log).toHaveLength(1);
+  expect(log[0].op).toBe('update.install');
+});
+
+test('Check leaves the card and Check all leaves the rows for their respective menus', async ({ page }) => {
+  await openDemo(page);
+  const row = rowOf(page);
+  await expect(row.getByRole('button', { name: /^Check/ })).toHaveCount(0);
+  await expect(page.locator('#machine-list .machine-check-all')).toHaveCount(0);
+
+  await row.locator('button[aria-haspopup="menu"]').click();
+  await page.getByRole('menuitem', { name: 'Check for updates', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check']);
+
+  await page.locator('#machines button[aria-haspopup="menu"]:not(#machine-list button)').click();
+  await page.getByRole('menuitem', { name: 'Check all', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.check', 'update.check']);
+});
+
 test('Update now on a quiet machine goes on one press, asking nothing, and says it updated', async ({ page }) => {
   await openDemo(page, '&updateNow=1');
   await setUpdate(page, QUIET);
