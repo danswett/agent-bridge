@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 using Microsoft.Win32.SafeHandles;
 
@@ -56,7 +57,7 @@ public sealed record AgentProcessObservation(IReadOnlyList<AgentProcess> Process
 
 // The real machine, on Windows, macOS and Linux. Only reads: it opens a process for
 // query-limited information and nothing more.
-public sealed class SystemProcessInspector : IProcessInspector
+public sealed partial class SystemProcessInspector : IProcessInspector
 {
     // Reading a command line costs a syscall on Windows and Linux, and a `ps` on macOS, so
     // each answer is kept against pid and start time: a pid alone is reused, and a
@@ -127,14 +128,11 @@ public sealed class SystemProcessInspector : IProcessInspector
         };
         if (name is null) { return new([], true); }
 
-        var listed = true;
         var listing = new List<ListedProcess>();
         var seen = new HashSet<int>();
-        foreach (var candidate in CandidateNames(name))
+        var running = RunningImages(agent, name, out var listed);
+        foreach (var (candidate, processes) in running)
         {
-            Process[] processes;
-            try { processes = Process.GetProcessesByName(candidate); }
-            catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { listed = false; continue; }
             foreach (var process in processes)
             {
                 using (process)
@@ -179,6 +177,47 @@ public sealed class SystemProcessInspector : IProcessInspector
         }
         return observation;
     }
+
+    // The running processes whose image is one this agent runs as, grouped by image, and whether they
+    // could all be listed. Codex's is asked for by every image on the machine, since the executable
+    // WinGet installs is named codex-x86_64-pc-windows-msvc.exe, which asking for "codex" never
+    // lists: a Codex launched from here then never appeared (#3644).
+    static List<(string Candidate, Process[] Processes)> RunningImages(AgentKind agent, string name, out bool listed)
+    {
+        listed = true;
+        var groups = new List<(string, Process[])>();
+        if (agent != AgentKind.Codex)
+        {
+            foreach (var candidate in CandidateNames(name))
+            {
+                try { groups.Add((candidate, Process.GetProcessesByName(candidate))); }
+                catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { listed = false; }
+            }
+            return groups;
+        }
+        Process[] all;
+        try { all = Process.GetProcesses(); }
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception or PlatformNotSupportedException) { listed = false; return groups; }
+        foreach (var process in all)
+        {
+            string image;
+            try { image = process.ProcessName; }
+            catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { image = ""; }
+            if (IsCandidateImage(agent, name, image)) { groups.Add((image, [process])); } else { process.Dispose(); }
+        }
+        return groups;
+    }
+
+    // Whether a process image (its name without the extension) is one the agent runs as: its own
+    // executable, or a runtime an npm install runs it in. Codex's vendored binary too
+    // (codex-<arch>-<vendor>-<os>-<abi>, as WinGet installs it), but not its helper programs
+    // (codex-code-mode-host, codex-windows-sandbox-setup), which are named codex-* as well.
+    internal static bool IsCandidateImage(AgentKind agent, string name, string image) =>
+        CandidateNames(name).Contains(image, StringComparer.OrdinalIgnoreCase)
+        || (agent == AgentKind.Codex && VendoredCodexImage().IsMatch(image));
+
+    [GeneratedRegex("^codex-(x86_64|aarch64|arm64|i686|armv7)-[a-z0-9_.-]+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex VendoredCodexImage();
 
     // How far up an executable's ancestry a launcher is looked for: npx, a shell and the loader
     // between it and the executable are three; the hooks read as far.

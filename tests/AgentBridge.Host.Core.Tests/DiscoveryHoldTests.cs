@@ -252,7 +252,7 @@ public class DiscoveryHoldTests
         f.Time.Advance(TimeSpan.FromHours(4.5));
         await source.RefreshAsync();
         Assert.Null(source.Held);
-        Assert.Single(log, l => l == $"carrying on without codex registration {C}: it names no process, was written 2 min ago, and no running codex could have written it");
+        Assert.Single(log, l => l == $"carrying on without codex registration {C}: it names no process, was written 2 min ago, and no running codex could have written it (no codex process is running)");
     }
 
     [Fact]
