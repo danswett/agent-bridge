@@ -17,7 +17,7 @@ namespace AgentBridge.App;
 // (UISettings.AnimationsEnabled) is read as each one starts: off, nothing travels, and an entry
 // either cross-fades or is skipped. WinUI's own transitions (Expander, MenuFlyout, NavigationView,
 // SelectorBar, pressed states) keep their own timing and follow the setting themselves.
-public static class Motion
+public static partial class Motion
 {
     static readonly Windows.UI.ViewManagement.UISettings Settings = new();
     static MotionCatalogue? catalogue;
