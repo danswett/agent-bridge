@@ -124,6 +124,7 @@ public sealed class PushFlowTests : IAsyncLifetime
 
         var hello = Result(await ch.RequestAsync(Ops.Hello, new { }));
         Assert.DoesNotContain(Capabilities.Push, hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.DoesNotContain(ApnsPushRequest.Capability, hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
         var refused = await ch.RequestAsync(Ops.PushSubscribe, new
         {
             endpoint = Endpoint(),
@@ -132,6 +133,15 @@ public sealed class PushFlowTests : IAsyncLifetime
         });
         Assert.False(refused.GetProperty("ok").GetBoolean());
         Assert.Equal(SessionService.NoNotifications, refused.GetProperty("error").GetString());
+        var nativeRefused = await ch.RequestAsync(ApnsPushRequest.Subscribe, new
+        {
+            token = "0102",
+            target = "prod",
+            keyId = B64Url.Encode(new byte[32]),
+            keys = new { p256dh = B64Url.Encode(browser.Public), auth = B64Url.Encode(auth) },
+        });
+        Assert.False(nativeRefused.GetProperty("ok").GetBoolean());
+        Assert.Equal("native push is not supported by this host", nativeRefused.GetProperty("error").GetString());
         // Turning notifications off on the phone still goes through cleanly.
         Assert.False(Result(await ch.RequestAsync(Ops.PushUnsubscribe, new { })).GetProperty("removed").GetBoolean());
         Assert.Empty(Result(await ch.RequestAsync(Ops.PushList, new { })).GetProperty("devices").EnumerateArray());
@@ -144,6 +154,20 @@ public sealed class PushFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
         var hello = Result(await ch.RequestAsync(Ops.Hello, new { }));
         Assert.Contains(Capabilities.Push, hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.Contains(ApnsPushRequest.Capability, hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        var native = Result(await ch.RequestAsync(ApnsPushRequest.Subscribe, new
+        {
+            token = "01020304",
+            target = "prod",
+            keyId = B64Url.Encode(new byte[32]),
+            keys = new { p256dh = B64Url.Encode(browser.Public), auth = B64Url.Encode(auth) },
+        }));
+        Assert.True(native.GetProperty("subscribed").GetBoolean());
+        Assert.Equal(1, native.GetProperty("count").GetInt32());
+        var nativeList = Result(await ch.RequestAsync(ApnsPushRequest.List, new { }));
+        Assert.Equal("apns:prod", Assert.Single(nativeList.GetProperty("devices").EnumerateArray()).GetProperty("service").GetString());
+        Assert.DoesNotContain("01020304", nativeList.GetRawText());
+        Assert.True(Result(await ch.RequestAsync(ApnsPushRequest.Unsubscribe, new { target = "prod" })).GetProperty("removed").GetBoolean());
         await SubscribeAsync(ch);
 
         await AskAsync("q1");
