@@ -84,9 +84,16 @@ internal sealed record ManagedInstructions(string FilePath, byte[]? Original, by
         return new(path, original, [.. preamble, .. encoding.GetBytes(wanted)]);
     }
 
-    public void Apply(string backup)
+    // Whether applying this plan would change the person's file.
+    public bool Changes => !(Original is null && Updated is null || Original is not null && Updated is not null && Original.AsSpan().SequenceEqual(Updated));
+
+    // A removal also keeps removalBackup, the file's exact bytes just before this removal: the
+    // first-original backup is only the file as it was at the first Set up, which the person may
+    // have edited since, so it cannot undo this one.
+    public void Apply(string backup, string? removalBackup = null)
     {
-        if (Original is null && Updated is null || Original is not null && Updated is not null && Original.AsSpan().SequenceEqual(Updated)) { return; }
+        if (!Changes) { return; }
+        if (Original is not null && removalBackup is not null) { DurableFile.Replace(removalBackup, Original, null); }
         if (Original is not null && !File.Exists(backup)) { DurableFile.Replace(backup, Original, null); }
         var expected = Original is null ? null : MigrationRecord.Hash(Original);
         if (Updated is null) { DurableFile.Remove(FilePath, expected); }
@@ -96,14 +103,6 @@ internal sealed record ManagedInstructions(string FilePath, byte[]? Original, by
     public static void CheckLegacy(string path)
     {
         if (File.Exists(path)) { RefuseLegacy(path, Decode(path, File.ReadAllBytes(path)).Text); }
-    }
-
-    public static void CheckNotShadowed(string path)
-    {
-        if (File.Exists(path) && !string.IsNullOrWhiteSpace(Decode(path, File.ReadAllBytes(path)).Text))
-        {
-            throw Refused(path, "overrides AGENTS.md; merge its contents into AGENTS.md and remove the override before setting up Codex");
-        }
     }
 
     static void RefuseLegacy(string path, string text)

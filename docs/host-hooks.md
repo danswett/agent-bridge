@@ -125,27 +125,34 @@ Readiness reports an owned record without `setupCompleted: true`, including reco
 before this field existed, as incomplete setup needing repair. Completion is setup evidence,
 not evidence that hooks run in a new session.
 
-Setup also installs product guidance in Copilot's `instructions\agent-bridge.instructions.md`,
-Claude's `CLAUDE.md` and Codex's `AGENTS.md`. The block is delimited by
-`<!-- agent-bridge-owner:... -->` and `<!-- /agent-bridge-owner -->`, with ownership bound
-to the host profile. It explains the user versus `agent@session` principal, reading real
-prompt replies rather than treating spool/heartbeat state as approval, and never sweeping
-a worktree root. Other text is preserved byte for byte, including whitespace, BOM,
-UTF-8/UTF-16/UTF-32 encoding and line endings. Unsupported or damaged text encoding,
-foreign/legacy ownership, multiple blocks and incomplete boundaries refuse the operation
-before hook changes. Shared instruction-file targets (including symlinks) and hard links
-are refused rather than removing another agent's guidance. Retained legacy Copilot guidance
-and legacy markers in Codex's `AGENTS.override.md` also block fresh setup.
-Codex setup also refuses a nonempty user override because it would hide the installed
-`AGENTS.md` guidance; merge the user guidance into `AGENTS.md` and remove the override
-before setup. Removing the connection never removes the user's override.
-The first existing file is backed up under
-`<profile>\hooks\backups\instructions`; backups are retained.
+Product guidance (the user versus `agent@session` principal, reading real prompt replies rather
+than treating spool/heartbeat state as approval, never sweeping a worktree root) reaches Claude
+and Codex through the `SessionStart` hook reply (the reply table below), not through the
+person's own instruction files: the owner objected to where it lived (Nov 24, #674). Set up,
+Repair and Remove write nothing to `CLAUDE.md` or `AGENTS.md`. An earlier version did, in a
+block delimited by `<!-- agent-bridge-owner:... -->` and `<!-- /agent-bridge-owner -->` and bound
+to the host profile; Set up and Repair for that agent now take that block out, and Remove still
+does. Before any removal the file's exact bytes are saved as
+`<profile>\hooks\backups\instructions\<agent>-removed-<UTC time>.bin` (kept; the older
+`<agent>.bin` is only the file at the first Set up), and the output says what was removed, that
+the person's own text is unchanged, and the `Copy-Item` that undoes it. Other text is preserved
+byte for byte, including whitespace, BOM, UTF-8/UTF-16/UTF-32 encoding and line endings; a file
+Set up created that held only the block is deleted. Unsupported or damaged text encoding,
+foreign/legacy ownership, multiple blocks and incomplete boundaries still refuse the operation
+before hook changes, as do shared instruction-file targets (including symlinks) and hard links.
 Writes use the same checked, recoverable file replacement as migration. A concurrent user
 save is preserved and reported as incomplete setup, leaving ownership for retry/removal.
-Removal deletes only the owned block and its inserted separators; a new file containing
-only that block is deleted, but pre-existing empty files and user-owned links remain.
+A dry run says "Would remove" and changes nothing. When the host starts it only reads: for each
+owned Claude or Codex file that still holds the old block it logs one line saying to run Set up;
+it never edits the file. A nonempty Codex `AGENTS.override.md` no longer blocks setup, since
+nothing is written for it to hide; legacy markers in it still do. Removing the connection never
+removes the user's override.
 
+**Copilot is the exception, for now.** Its hook file has no `sessionStart` entry and GitHub
+documents that output as ignored, so Copilot still gets the block in its own
+`instructions\agent-bridge.instructions.md` (the same text, `SessionGuidance.Text`), with the
+backup and removal rules as before. Dropping it needs a delivery route first, or Copilot's
+guidance would vanish silently.
 Inspect `agent-bridge-host hooks status` after restart: intake must be on, the heartbeat
 fresh, and hook runs must appear when the new sessions emit events. A fresh heartbeat alone
 does **not** prove an agent loaded its hooks. Workspace approval is separate from agents'

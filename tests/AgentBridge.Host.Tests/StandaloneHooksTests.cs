@@ -155,15 +155,132 @@ public sealed class StandaloneHooksTests : IDisposable
         _ => Path.Combine(Homes.Codex, "AGENTS.md"),
     };
 
+    // What an earlier version's Set up left in the person's file: the same block, written by the same planner.
+    void SeedOldBlock(string agent) =>
+        ManagedInstructions.Plan(Instructions(agent), Profile, removing: false).Apply(Path.Combine(root, "seed-backup", agent + ".bin"));
+
+    string[] RemovalBackups(string agent) => Directory.Exists(Path.Combine(Profile, "hooks", "backups", "instructions"))
+        ? Directory.GetFiles(Path.Combine(Profile, "hooks", "backups", "instructions"), agent + "-removed-*.bin") : [];
+
+    [Fact]
+    public async Task The_block_Copilot_still_gets_holds_the_same_guidance_the_session_start_hook_gives()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+
+        Assert.Contains(SessionGuidance.Text.ReplaceLineEndings("\n"), File.ReadAllText(Instructions("copilot")).ReplaceLineEndings("\n"));
+    }
+
     [Theory]
-    [InlineData("copilot")]
     [InlineData("claude")]
     [InlineData("codex")]
-    public async Task The_block_Set_up_writes_holds_the_same_guidance_the_session_start_hook_gives(string agent)
+    public async Task Fresh_setup_writes_nothing_to_the_persons_instruction_files(string agent)
     {
         await Setup.InstallAsync(agent, false, TextWriter.Null);
 
-        Assert.Contains(SessionGuidance.Text.ReplaceLineEndings("\n"), File.ReadAllText(Instructions(agent)).ReplaceLineEndings("\n"));
+        Assert.False(File.Exists(Instructions(agent)));
+        Assert.Empty(RemovalBackups(agent));
+        Assert.False(Directory.Exists(Path.Combine(Profile, "hooks", "backups", "instructions")));
+    }
+
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task Setup_removes_the_old_block_leaving_the_persons_text_byte_for_byte_with_a_backup_and_a_notice(string agent)
+    {
+        var path = Instructions(agent);
+        Write(path, "User guidance\r\n\r\nDo not change this text.");
+        var before = File.ReadAllBytes(path);
+        SeedOldBlock(agent);
+        var seeded = File.ReadAllBytes(path);
+        Assert.NotEqual(before, seeded);
+        using var output = new StringWriter();
+
+        await Setup.InstallAsync(agent, false, output);
+
+        Assert.Equal(before, File.ReadAllBytes(path));
+        var backup = Assert.Single(RemovalBackups(agent));
+        Assert.Equal(seeded, File.ReadAllBytes(backup));
+        Assert.Contains($"Removed Slipgates' old guidance block from {path}", output.ToString());
+        Assert.Contains("Your own text was not changed", output.ToString());
+        Assert.Contains(backup, output.ToString());
+        Assert.Contains("Copy-Item", output.ToString());
+
+        using var again = new StringWriter();
+        await Setup.InstallAsync(agent, false, again);
+        Assert.Equal(before, File.ReadAllBytes(path));
+        Assert.Single(RemovalBackups(agent));
+        Assert.DoesNotContain("Removed Slipgates' old guidance block", again.ToString());
+    }
+
+    [Fact]
+    public async Task A_file_holding_only_the_old_block_is_deleted_and_its_exact_bytes_are_backed_up()
+    {
+        SeedOldBlock("claude");
+        var seeded = File.ReadAllBytes(Instructions("claude"));
+
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+
+        Assert.False(File.Exists(Instructions("claude")));
+        Assert.Equal(seeded, File.ReadAllBytes(Assert.Single(RemovalBackups("claude"))));
+    }
+
+    [Fact]
+    public async Task A_dry_run_names_the_old_block_it_would_remove_and_changes_nothing()
+    {
+        Write(Instructions("claude"), "User guidance\n");
+        SeedOldBlock("claude");
+        var before = Listing();
+        using var output = new StringWriter();
+
+        await Setup.InstallAsync("claude", true, output);
+
+        Assert.Equal(before, Listing());
+        Assert.Contains("Would remove Slipgates' old guidance block", output.ToString());
+    }
+
+    [Fact]
+    public async Task Remove_takes_out_a_leftover_block_with_a_fresh_backup_and_a_notice()
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Write(Instructions("claude"), "User guidance\n");
+        var before = File.ReadAllBytes(Instructions("claude"));
+        SeedOldBlock("claude");
+        var seeded = File.ReadAllBytes(Instructions("claude"));
+        using var output = new StringWriter();
+
+        await Setup.RemoveAsync("claude", false, output);
+
+        Assert.Equal(before, File.ReadAllBytes(Instructions("claude")));
+        Assert.Equal(seeded, File.ReadAllBytes(Assert.Single(RemovalBackups("claude"))));
+        Assert.Contains("Removed Slipgates' old guidance block", output.ToString());
+    }
+
+    [Fact]
+    public async Task The_host_start_check_names_an_old_block_in_an_owned_agents_file_and_changes_nothing()
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        Write(Instructions("claude"), "User guidance\n");
+        SeedOldBlock("claude");
+        var before = Listing();
+        var stamp = File.GetLastWriteTimeUtc(Instructions("claude"));
+
+        var notices = Setup.OldGuidanceNotices();
+
+        var notice = Assert.Single(notices);
+        Assert.Contains(Instructions("claude"), notice);
+        Assert.Contains("Set up", notice);
+        Assert.Equal(before, Listing());
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(Instructions("claude")));
+    }
+
+    [Fact]
+    public void The_host_start_check_reads_nothing_for_an_agent_this_profile_does_not_own()
+    {
+        Write(Instructions("claude"), "User guidance\n");
+        SeedOldBlock("claude");
+
+        Assert.Empty(Setup.OldGuidanceNotices());
     }
 
     [Fact]
@@ -305,10 +422,9 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Equal(before, Listing());
     }
 
+    // Copilot alone still gets its dedicated instruction file: it has no session-start delivery yet (#674).
     [Theory]
     [InlineData("copilot")]
-    [InlineData("claude")]
-    [InlineData("codex")]
     public async Task Setup_adds_owned_guidance_and_removal_restores_existing_text_exactly(string agent)
     {
         var path = Instructions(agent);
@@ -346,11 +462,10 @@ public sealed class StandaloneHooksTests : IDisposable
         Directory.CreateDirectory(Homes.Claude);
         byte[] before = [.. encoding.GetPreamble(), .. encoding.GetBytes(text)];
         File.WriteAllBytes(path, before);
+        SeedOldBlock("claude");
+        Assert.Contains("agent@session", File.ReadAllText(path));
 
         await Setup.InstallAsync("claude", false, TextWriter.Null);
-        Assert.Equal(encoding.GetPreamble(), File.ReadAllBytes(path)[..encoding.GetPreamble().Length]);
-        Assert.Contains("agent@session", File.ReadAllText(path));
-        await Setup.RemoveAsync("claude", false, TextWriter.Null);
 
         Assert.Equal(before, File.ReadAllBytes(path));
     }
@@ -358,16 +473,16 @@ public sealed class StandaloneHooksTests : IDisposable
     [Fact]
     public async Task A_new_instruction_file_is_removed_but_later_user_additions_survive_repair_and_removal()
     {
-        var path = Instructions("claude");
-        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var path = Instructions("copilot");
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
         Assert.True(File.Exists(path));
-        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+        await Setup.RemoveAsync("copilot", false, TextWriter.Null);
         Assert.False(File.Exists(path));
 
-        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
         File.AppendAllText(path, "\nUser additions\n\n");
-        await Setup.InstallAsync("claude", false, TextWriter.Null);
-        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.RemoveAsync("copilot", false, TextWriter.Null);
 
         Assert.Equal("\nUser additions\n\n", File.ReadAllText(path));
     }
@@ -419,15 +534,16 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Fact]
-    public async Task Codex_setup_refuses_shadowing_user_overrides_without_changing_any_files()
+    public async Task Codex_setup_leaves_a_user_override_alone_since_it_writes_no_guidance_for_it_to_hide()
     {
-        Write(Path.Combine(Homes.Codex, "AGENTS.override.md"), "User guidance\n");
-        var before = Listing();
+        var path = Path.Combine(Homes.Codex, "AGENTS.override.md");
+        Write(path, "User guidance\n");
+        var before = File.ReadAllBytes(path);
 
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
 
-        Assert.Contains("overrides AGENTS.md", exception.Message);
-        Assert.Equal(before, Listing());
+        Assert.Equal(before, File.ReadAllBytes(path));
+        Assert.False(File.Exists(Instructions("codex")));
     }
 
     [Fact]
@@ -466,6 +582,7 @@ public sealed class StandaloneHooksTests : IDisposable
     public async Task Damaged_owned_guidance_refuses_removal_before_hooks_or_ownership_change()
     {
         await Setup.InstallAsync("claude", false, TextWriter.Null);
+        SeedOldBlock("claude");
         var path = Instructions("claude");
         File.WriteAllText(path, File.ReadAllText(path).Replace("<!-- /agent-bridge-owner -->", ""));
         var before = Listing();
@@ -480,6 +597,7 @@ public sealed class StandaloneHooksTests : IDisposable
     {
         var path = Instructions("claude");
         Write(path, "Original\n");
+        SeedOldBlock("claude");
         DurableFile.BeforeCommit.Value = target =>
         {
             if (target == path) { File.WriteAllText(path, "Concurrent user save\n"); }

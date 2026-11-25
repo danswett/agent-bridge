@@ -33,6 +33,46 @@ public sealed class StandaloneHooks(
         _ => throw new ArgumentException("Choose copilot (also Agency), claude or codex."),
     };
     string InstructionBackup(string agent) => Path.Combine(HookFolder, "backups", "instructions", $"{agent}.bin");
+    // A removal's own backup, kept apart so a later one never overwrites it.
+    string RemovalBackup(string agent) => Path.Combine(HookFolder, "backups", "instructions", $"{agent}-removed-{DateTimeOffset.UtcNow:yyyyMMdd'T'HHmmssfff'Z'}.bin");
+
+    // Claude and Codex are given the session guidance at SessionStart (SessionGuidance), so Set up no
+    // longer writes it into the person's CLAUDE.md or AGENTS.md and only takes out what an earlier
+    // version wrote. Copilot has no such delivery yet (its sessionStart output is ignored), so it
+    // keeps its dedicated instruction file until it does (#674).
+    static bool WritesInstructions(string agent) => agent == "copilot";
+
+    // The notice for taking out our old block: where, that the person's text is untouched, and how to undo.
+    // "Old" only where Set up no longer writes the block; Copilot's is still current.
+    static string RemovalNotice(bool done, string agent, string path, string backup, bool settingUp) =>
+        $"{(done ? "Removed" : "Would remove")} Slipgates' {(WritesInstructions(agent) ? "" : "old ")}guidance block from {path}. Your own text {(done ? "was not" : "would not be")} changed. "
+        + (done ? $"Backup: {backup}. " : "")
+        + (settingUp && !WritesInstructions(agent) ? "Slipgates now gives this guidance when a Claude or Codex session starts and writes nothing to your instruction files. " : "")
+        + $"To undo: Copy-Item -LiteralPath '{backup}' -Destination '{path}' -Force";
+
+    // Read-only, for the host's start: one line for each owned Claude or Codex file that still holds
+    // our old block, telling the person how to remove it. It never edits the file (#674: no
+    // unrequested write to the person's instruction files); Set up, Repair and Remove do that.
+    internal IReadOnlyList<string> OldGuidanceNotices()
+    {
+        var notices = new List<string>();
+        foreach (var agent in new[] { "claude", "codex" })
+        {
+            try
+            {
+                if (!OwnsAgent(agent)) { continue; }
+                if (ManagedInstructions.Plan(Instructions(agent), profile, removing: true).Changes)
+                {
+                    notices.Add($"old guidance block in {Instructions(agent)}; run Set up for {agent} to remove it (your own text is not changed)");
+                }
+            }
+            catch (Exception e) when (e is InvalidDataException or InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                // An unreadable or foreign file is left for Set up to report; this check says nothing about it.
+            }
+        }
+        return notices;
+    }
 
     internal bool OwnsAgent(string agent)
     {
@@ -257,14 +297,15 @@ public sealed class StandaloneHooks(
             // marketplace there; writing ownership below creates it before the first CLI write.
             marketplacePresent = Directory.Exists(homes.Codex) && await CheckMarketplaceAsync(executable, owned, ct);
         }
-        if (agent == "codex") { ManagedInstructions.CheckNotShadowed(Path.Combine(homes.Codex, "AGENTS.override.md")); }
-        var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: false);
+        var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: !WritesInstructions(agent));
+        var removalBackup = RemovalBackup(agent);
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
         // Preflight let a leftover through only as unused; it is judged again here, just before it is renamed.
         var retiring = adopted is null && Directory.Exists(legacyHome);
         if (dryRun)
         {
+            if (!WritesInstructions(agent) && instructions.Changes) { output.WriteLine(RemovalNotice(false, agent, instructions.FilePath, removalBackup, settingUp: true)); }
             if (retiring) { output.WriteLine($"Would rename {legacyHome}, an unused older bridge folder, to {LegacyHome.Target(legacyHome, DateTimeOffset.UtcNow)}."); }
             return;
         }
@@ -286,7 +327,8 @@ public sealed class StandaloneHooks(
         var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
         DurableFile.Replace(owner, incomplete, ownerBefore);
         RefreshHook();
-        instructions.Apply(InstructionBackup(agent));
+        instructions.Apply(InstructionBackup(agent), WritesInstructions(agent) ? null : removalBackup);
+        if (!WritesInstructions(agent) && instructions.Changes) { output.WriteLine(RemovalNotice(true, agent, instructions.FilePath, removalBackup, settingUp: true)); }
         if (root is not null) { DurableFile.Replace(path, Bytes(root), before); }
         else
         {
@@ -349,10 +391,15 @@ public sealed class StandaloneHooks(
             if (before is not null) { root = Read(path); Unregister(root, agent); }
         }
         var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: true);
+        var removalBackup = RemovalBackup(agent);
         var original = agent == "claude" && root is not null ? ClaudeOriginal(root, output) : null;
         Preflight(agent, removing: true);
         output.WriteLine($"{(dryRun ? "Would remove" : "Removing")} only {agent} hooks owned by {profile}.");
-        if (dryRun) { return; }
+        if (dryRun)
+        {
+            if (instructions.Changes) { output.WriteLine(RemovalNotice(false, agent, instructions.FilePath, removalBackup, settingUp: false)); }
+            return;
+        }
         // Clear completion before the first cleanup step: a removal that fails or is cancelled
         // part way (plugin removed but not its marketplace, instructions left behind) must read
         // as incomplete and keep ownership for Repair, not as a completed setup. Preflight just
@@ -373,7 +420,8 @@ public sealed class StandaloneHooks(
             if (agent == "copilot" && root.All(p => p.Key == "version")) { DurableFile.Remove(path, before); }
             else { DurableFile.Replace(path, original ?? Bytes(root), before); }
         }
-        instructions.Apply(InstructionBackup(agent));
+        instructions.Apply(InstructionBackup(agent), removalBackup);
+        if (instructions.Changes) { output.WriteLine(RemovalNotice(true, agent, instructions.FilePath, removalBackup, settingUp: false)); }
         // Ownership goes only after every cleanup step succeeded. A dedicated Copilot file with
         // somebody else's additions must remain attributable, otherwise reinstall would have to
         // claim an unowned file or permanently refuse it; its record stays without completion.

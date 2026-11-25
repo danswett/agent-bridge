@@ -866,6 +866,12 @@ async Task<int> ServeAsync(HostHandover handover)
         agentHomes, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
         ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
+    // Read-only: a file an earlier version's Set up wrote its guidance into is named once, never edited here (#674).
+    if (standaloneHooks is not null)
+    {
+        try { foreach (var notice in standaloneHooks.OldGuidanceNotices()) { Log(notice); } }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException) { Log($"the old guidance check could not run: {e.Message}"); }
+    }
     var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
     if (agentSetup is not null) { manage.Hooks = new AgentSetupHookRepair(agentSetup, agentHomes, identity.Folder); }
     var agentProbes = new VersionCommandRunner(() => AgentEnvironment.For(agentHomes.Copilot,
