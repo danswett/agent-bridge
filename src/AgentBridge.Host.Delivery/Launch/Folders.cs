@@ -63,17 +63,61 @@ public static class Folders
     }
 
     // The folder as it really is on disk, every component's link (junction, symlink) resolved,
-    // or null when it does not exist or cannot be read.
-    public static string? Physical(string path) => Physical(path, 0);
+    // or null when it does not exist, cannot be read, or took too long (see Resolve).
+    public static string? Physical(string path) => Resolve(path).Path;
 
-    static string? Physical(string path, int depth)
+    // Physical, with the reason when there is none. It never waits for ever: a link to an offline network share can stall the file system
+    // call, so the work is given ResolveBound and a path that stalled is not asked again for StalledFor. With localOnly (an approval), a link whose
+    // target is not on a local fixed drive is refused before the target is touched.
+    public static FolderResolved Resolve(string path, bool localOnly = false, TimeSpan? timeout = null)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return new(null, FolderProblem.Missing); }
+        return Bounded(full, () => Walk(full, 0, localOnly), timeout ?? ResolveBound, out var resolved) ? resolved : new(null, FolderProblem.TimedOut);
+    }
+
+    static readonly TimeSpan ResolveBound = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan StalledFor = TimeSpan.FromSeconds(30);
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> stalled = new(StringComparer.OrdinalIgnoreCase);
+
+    internal static void ForgetStalled() => stalled.Clear();
+
+    // Runs work and gives up after timeout, remembering that key stalled so the next asks for it, or for anything below it, within StalledFor do
+    // not wait again. The stalled call is left to finish (or not) on its own thread, which is its own rather than the pool's so a stall cannot
+    // starve it, and the mark is dropped as soon as that call does finish: a disk that was only slow is asked again.
+    internal static bool Bounded<T>(string key, Func<T> work, TimeSpan timeout, out T? result)
+    {
+        result = default;
+        var now = Environment.TickCount64;
+        foreach (var (marked, until) in stalled)
+        {
+            if (now < until && IsAtOrUnder(key, marked)) { return false; }
+        }
+        var task = Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        if (task.Wait(timeout)) { result = task.Result; return true; }
+        if (stalled.Count > 256) { stalled.Clear(); }
+        stalled[key] = Environment.TickCount64 + (long)StalledFor.TotalMilliseconds;
+        task.ContinueWith(_ => stalled.TryRemove(key, out long _), TaskScheduler.Default);
+        return false;
+    }
+
+    // A fixed drive of this machine (Windows): not a network share (UNC or mapped), a removable or optical drive, or one that is not there.
+    public static bool IsLocalFixed(string path)
+    {
+        if (!OperatingSystem.IsWindows()) { return true; }
+        if (path.StartsWith(@"\\", StringComparison.Ordinal)) { return false; }
+        try { return new DriveInfo(Path.GetPathRoot(path) ?? "").DriveType == DriveType.Fixed; }
+        catch (Exception e) when (e is ArgumentException or IOException) { return false; }
+    }
+
+    static FolderResolved Walk(string full, int depth, bool localOnly)
     {
         // Bounded, so a link cycle cannot hold a launch for ever.
-        if (depth > 32) { return null; }
+        if (depth > 32) { return new(null, FolderProblem.Missing); }
         try
         {
-            var full = Path.GetFullPath(path);
-            if (!Directory.Exists(full)) { return null; }
+            if (localOnly && !IsLocalFixed(full)) { return new(null, FolderProblem.NotLocal); }
             var root = Path.GetPathRoot(full)!;
             var current = root;
             foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
@@ -82,15 +126,17 @@ public static class Folders
                 if (new DirectoryInfo(next).LinkTarget is { } target)
                 {
                     // The target may run through links of its own.
-                    var resolved = Physical(Path.IsPathRooted(target) ? target : Path.Combine(current, target), depth + 1);
-                    if (resolved is null) { return null; }
-                    next = resolved;
+                    var targetFull = Path.GetFullPath(Path.IsPathRooted(target) ? target : Path.Combine(current, target));
+                    if (localOnly && !IsLocalFixed(targetFull)) { return new(null, FolderProblem.NotLocal); }
+                    var resolved = Walk(targetFull, depth + 1, localOnly);
+                    if (resolved.Path is null) { return resolved; }
+                    next = resolved.Path;
                 }
                 current = next;
             }
-            return Directory.Exists(current) ? Trim(current) : null;
+            return Directory.Exists(current) ? new(Trim(current), FolderProblem.None) : new(null, FolderProblem.Missing);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return new(null, FolderProblem.Missing); }
     }
 
     public static bool IsAtOrUnder(string path, string root)
@@ -131,3 +177,8 @@ public static class Folders
         return path.Length > root.Length ? path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) : path;
     }
 }
+
+public enum FolderProblem { None, Missing, NotLocal, TimedOut }
+
+public readonly record struct FolderResolved(string? Path, FolderProblem Problem);
+
