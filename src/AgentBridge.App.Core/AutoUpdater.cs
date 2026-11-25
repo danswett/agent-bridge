@@ -445,7 +445,7 @@ public sealed class AutoUpdater
         }
         // Install between turns: the update window, the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
-        if (!InUpdateWindow(now)) { return $"it waits for the update window {Window.Label}"; }
+        if (!InUpdateWindow(now)) { return Window.Held ? "updates are held on this machine; it waits for your press" : $"it waits for the update window {Window.Label}"; }
         if (FailedRetryAt(now) is not null) { return "update failed; trying again soon, or at Restart to update"; }
         if (PolicyUnchecked) { return PolicyHold; }
         var at = ForcedAt(now);

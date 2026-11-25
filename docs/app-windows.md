@@ -630,6 +630,15 @@ controls consume that same contract; this extraction does not disable or remove 
   the app nor the host does: an x64 copy is never offered an Arm64 package, nor the reverse,
   whichever is newer (`HostUpdatesTests`). Moving x64 to another channel name would strand every
   installed copy on its last version, so it stays `win`.
+* **When updates install by themselves** (#4468; owner, Nov 24 ~08:15 PT: "Window 02:00-05:00 PT"):
+  what installs unasked, Install between turns and the host's version heal, goes only inside
+  the **update window**, 02:00-05:00 Pacific Time by default (`InstallWindow`, read at the instant
+  from the updater's clock, so daylight saving moves it). Settings' **When updates install by
+  themselves**, per machine and profile, chooses **Only in the update window** (with its start and
+  end, kept in `installWindowStart` and `installWindowEnd`), **Any time** (the old behaviour), or
+  **Hold** (`installHold`: nothing unasked at any hour until it is turned off; the hours are kept).
+  A person's own press (Restart to update, a device's Install) is never limited by any of them. A
+  release ready and kept waiting says so in Settings, and when it installs.
 * **Updates in the background, installed as "When an update is ready" says** (`AutoUpdater`,
   #516; owner decision on #689, 6674007815; Product, 6674016765 and 6674052423; Creative,
   6674096426): Settings has "Include pre-releases in updates" and "Download updates

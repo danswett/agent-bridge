@@ -6,8 +6,9 @@ namespace AgentBridge.App.Core;
 // local time in Zone at the instant asked, so daylight saving moves it with the clock. End is excluded; a window whose
 // End is before its Start runs over midnight, and one whose Start is its End is all day, which only both times set and
 // readable can give. The instant comes from the caller's TimeProvider, never the wall clock. A person's press is never
-// held by it (AutoUpdater). With no time zone this machine knows, it is closed and says why (Problem), never a throw.
-public sealed record InstallWindow(TimeOnly Start, TimeOnly End, TimeZoneInfo? Zone, string? Problem = null)
+// held by it (AutoUpdater). Held is the person's hold (Settings, per machine): nothing unasked at any hour, whatever the
+// hours are. With no time zone this machine knows, it is closed and says why (Problem), never a throw.
+public sealed record InstallWindow(TimeOnly Start, TimeOnly End, TimeZoneInfo? Zone, string? Problem = null, bool Held = false)
 {
     public static readonly TimeOnly DefaultStart = new(2, 0);
     public static readonly TimeOnly DefaultEnd = new(5, 0);
@@ -20,19 +21,25 @@ public sealed record InstallWindow(TimeOnly Start, TimeOnly End, TimeZoneInfo? Z
         find ??= FindZone;
         var (start, end) = Time(prefs.InstallWindowStart) is { } s && Time(prefs.InstallWindowEnd) is { } e ? (s, e) : (DefaultStart, DefaultEnd);
         var zone = (string.IsNullOrWhiteSpace(prefs.InstallWindowZone) ? null : find(prefs.InstallWindowZone)) ?? find(DefaultZone) ?? find("Pacific Standard Time");
-        return zone is null ? new(start, end, null, "no time zone for it is known on this machine") : new(start, end, zone);
+        var window = zone is null ? new InstallWindow(start, end, null, "no time zone for it is known on this machine") : new InstallWindow(start, end, zone);
+        return window with { Held = prefs.InstallHold };
     }
 
     public bool IsOpen(DateTimeOffset at)
     {
-        if (Zone is null) { return false; }
+        if (Held || Zone is null) { return false; }
         if (Start == End) { return true; }
         var local = TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, Zone).DateTime);
         return Start < End ? local >= Start && local < End : local >= Start || local < End;
     }
 
-    // "02:00-05:00 Pacific Time", as the waiting update says it; closed, it says why.
-    public string Label => $"{Start:HH\\:mm}-{End:HH\\:mm} {(Zone is null ? $"Pacific Time, closed: {Problem}" : IsPacific(Zone) ? "Pacific Time" : Zone.Id)}";
+    // Both set and equal (Of gives no other way to it): all day. A hold is not.
+    public bool AllDay => !Held && Start == End;
+
+    public string ZoneLabel => Zone is null || IsPacific(Zone) ? "Pacific Time" : Zone.Id;
+
+    // "02:00-05:00 Pacific Time", as the waiting update says it; closed, it says why; held, it says so.
+    public string Label => Held ? "held" : $"{Start:HH\\:mm}-{End:HH\\:mm} {(Zone is null ? $"Pacific Time, closed: {Problem}" : ZoneLabel)}";
 
     static TimeOnly? Time(string? value) =>
         TimeOnly.TryParseExact(value, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var t) ? t : null;

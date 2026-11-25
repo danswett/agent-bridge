@@ -90,8 +90,9 @@ public sealed partial class SettingsViewModel : Observable
     // says nothing on the rows of the host that came back.
     int hostsGone;
 
-    public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay, bool relayEditable = true)
+    public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay, bool relayEditable = true, TimeProvider? time = null)
     {
+        clock = time ?? TimeProvider.System;
         this.host = host;
         ScriptCredentials = new ScriptCredentialsModel(host);
         this.manager = manager;
@@ -756,6 +757,8 @@ public sealed partial class SettingsViewModel : Observable
         Reconcile();
         Raise(nameof(UpdateStatus));
         Raise(nameof(UpdateAvailable));
+        Raise(nameof(InstallWaitNote));
+        Raise(nameof(HasInstallWaitNote));
         // Changed on its own (a release downloaded in the background, or gone): said to a screen
         // reader once (ui.md §9.1 A6). Settings' own progress and results are its own actions'.
         // While Settings is busy with something else, it is said once Settings is idle (RunAsync):

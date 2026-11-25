@@ -92,6 +92,29 @@ public sealed class InstallWindowTests
         Assert.All(new[] { "2026-11-24T00:00:00", "2026-11-24T07:59:59", "2026-11-24T20:00:00" }, at => Assert.True(allDay.IsOpen(Utc(at))));
     }
 
+    // #4468 slice 2: a hold is the person's "nothing unasked", at every hour, whatever window is also set.
+    [Theory]
+    [InlineData("2026-11-24T11:00:00")]
+    [InlineData("2026-11-24T20:00:00")]
+    public void A_hold_is_never_open_even_inside_the_window_or_set_all_day(string utc)
+    {
+        Assert.False(InstallWindow.Of(new AppPreferences { InstallHold = true }).IsOpen(Utc(utc)));
+        Assert.False(InstallWindow.Of(new AppPreferences { InstallHold = true, InstallWindowStart = "00:00", InstallWindowEnd = "00:00" }).IsOpen(Utc(utc)));
+    }
+
+    [Fact]
+    public void A_hold_and_all_day_say_so_and_the_default_is_neither()
+    {
+        var held = InstallWindow.Of(new AppPreferences { InstallHold = true });
+        Assert.True(held.Held);
+        Assert.Equal("held", held.Label);
+        Assert.False(held.AllDay);
+        Assert.True(InstallWindow.Of(new AppPreferences { InstallWindowStart = "00:00", InstallWindowEnd = "00:00" }).AllDay);
+        Assert.False(Default.AllDay);
+        Assert.False(Default.Held);
+        Assert.Equal("Pacific Time", Default.ZoneLabel);
+    }
+
     [Theory]
     [InlineData("2026-11-24T23:30:00", true)]
     [InlineData("2026-11-25T00:30:00", true)]
