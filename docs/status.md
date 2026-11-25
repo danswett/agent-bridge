@@ -151,7 +151,7 @@ record migration evidence, not a current machine list or placement map.
 | Coordinator relocation | On 11-02 the UI coordinator moved to another fleet machine so the Dev Box could migrate |
 | Remaining desktop and macOS migrations | agent-ha-bridge only. The macOS host waits for P5 |
 | Disposable Hyperloop guest | Down since a reboot on 2026-10-31: its autologon failed and no one knows its generated password. Left down by the owner's decision; not needed |
-| Disposable Azure rehearsal machines | **Running** a scripted shadow soak (§3) since 2026-11-01, auto-shutdown off; snapshots S0/S1 kept. `build/rehearsal-azure-vmw.ps1 -Start` / `-Deallocate`; the soak's `build/shadow-soak-vm.ps1 -Finish` deallocates. Both need the `AGENT_BRIDGE_REHEARSAL_AZURE_USER` user environment variable set once (docs/parity-checklist.md, VM-W in Azure). A disposable Linux VM was created for the E13 checks and deleted. Azure: the owner's Visual Studio Enterprise subscription `0e38f344…` only, named on every call (the `~/.azure-agentbridge` config's default is a trial) |
+| Disposable Azure rehearsal machines | **Running** a scripted shadow soak (§3) since 2026-11-01, auto-shutdown off; snapshots S0/S1 kept. `build/rehearsal-azure-vmw.ps1 -Start` / `-Deallocate`; the soak's `build/shadow-soak-vm.ps1 -Finish` deallocates. Both run as the account az is already signed in as and print it; `AGENT_BRIDGE_REHEARSAL_AZURE_USER` is an optional override (docs/parity-checklist.md, VM-W in Azure). A disposable Linux VM was created for the E13 checks and deleted. Azure: the owner's Visual Studio Enterprise subscription `0e38f344…` only, named on every call (the `~/.azure-agentbridge` config's default is a trial) |
 
 ### Running work
 
