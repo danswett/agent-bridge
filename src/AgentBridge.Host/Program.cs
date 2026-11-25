@@ -385,6 +385,9 @@ switch (command)
             if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
+    case "mcp":
+        // The MCP server, started by the agent CLI as a stdio child of the session: it acts as that agent and nothing more.
+        return await AgentBridge.Host.Mcp.McpServer.RunStdioAsync(k => Environment.GetEnvironmentVariable(k), Console.OpenStandardInput(), Console.OpenStandardOutput());
     case "scripts":
         if (Refused("change script credentials")) { return 4; }
         return await AgentBridge.Host.Cli.ScriptCredentialCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);

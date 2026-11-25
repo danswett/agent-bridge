@@ -182,4 +182,37 @@ public sealed class McpToolsTests
         Assert.Equal("launch.options", (string?)(await McpTools.LaunchOptionsAsync(host))["op"]);
         Assert.Equal("usage.get", (string?)(await McpTools.UsageAsync(host))["op"]);
     }
+
+    const string Session1 = "11111111-1111-4111-8111-111111111111";
+
+    [Fact]
+    public async Task End_sends_fleet_end_with_no_grant_and_a_fresh_request_and_returns_the_outcome()
+    {
+        var host = new FakeHost { Answer = (op, d) => new JsonObject { ["outcome"] = "ended" } };
+        var end = await McpTools.EndAsync(host, Session1, null);
+        Assert.Equal("ended", (string?)end["outcome"]);
+        var sent = host.Calls.Single().Data!;
+        Assert.Equal("fleet.end", host.Calls.Single().Op);
+        Assert.Equal(1, (int?)sent["version"]);
+        Assert.Equal("00000000-0000-0000-0000-000000000000", (string?)sent["grant"]);
+        Assert.Equal(Session1, (string?)sent["session"]);
+        Assert.True(Guid.TryParse((string?)sent["request"], out _));
+        Assert.Equal((string?)sent["request"], (string?)end["request"]);
+    }
+
+    [Fact]
+    public async Task End_keeps_the_callers_request_a_host_refusal_carries_its_reason_and_a_lost_answer_is_unknown()
+    {
+        var refused = new FakeHost { Answer = (op, d) => new JsonObject { ["outcome"] = "refused", ["reason"] = "scope" } };
+        var r = await McpTools.EndAsync(refused, Session1, "22222222-2222-4222-8222-222222222222");
+        Assert.Equal("refused", (string?)r["outcome"]);
+        Assert.Equal("scope", (string?)r["reason"]);
+        Assert.Equal("22222222-2222-4222-8222-222222222222", (string?)r["request"]);
+        var lost = new FakeHost { Answer = (op, d) => throw new McpToolException("did not answer", McpFailure.Unavailable) };
+        var u = await McpTools.EndAsync(lost, Session1, "22222222-2222-4222-8222-222222222222");
+        Assert.Equal("unknown", (string?)u["outcome"]);
+        Assert.Equal("22222222-2222-4222-8222-222222222222", (string?)u["request"]);
+        var denied = new FakeHost { Answer = (op, d) => throw new McpToolException("not allowed", McpFailure.Refused) };
+        Assert.Equal("refused", (string?)(await McpTools.EndAsync(denied, Session1, null))["outcome"]);
+    }
 }
