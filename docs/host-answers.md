@@ -768,6 +768,14 @@ daemon stopped, or G5 refuses). Its Codex hook writes the approval marker only a
 reaching Home Assistant (`Enter-BridgeAdapterSession`); without that, an approval is seen
 at most in the rollout, and answered at the machine.
 
+A Claude question is over when the transcript has a `tool_result` with the call's id, read before or
+after the call's own entry (Claude Code can write a result first when calls run in parallel; a
+result read first is remembered, so the call is not asked when its entry follows). A second,
+timestamp-less copy of the same result, which Claude Code also writes, changes nothing. An answer
+sent after the result is refused `stale` and never typed (step 5), and a client drops the question
+when the host's next snapshot or update no longer lists it. The question's message lists each
+question's option descriptions under that question's own text, not in one list for all.
+
 ## Before and after typing
 
 In order, for every answer:
