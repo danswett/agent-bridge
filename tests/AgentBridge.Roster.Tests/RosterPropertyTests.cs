@@ -6,7 +6,11 @@ using AgentBridge.Roster;
 // its ancestors decides (prefix reduction).
 public sealed class RosterPropertyTests
 {
-    public static TheoryData<string> Scenarios => new(Builders.Keys);
+    // The scenarios are shared out over four classes (this and RosterPropertyTests2 to 4) by their place in name order, so
+    // one class is not the long pole of a test shard; a scenario added to Builders joins one of them.
+    public static TheoryData<string> Scenarios => Group(0);
+
+    internal static TheoryData<string> Group(int group) => new(Builders.Keys.Order(StringComparer.Ordinal).Where((_, i) => i % 4 == group));
 
     internal static readonly Dictionary<string, Func<World>> Builders = new()
     {
@@ -83,7 +87,7 @@ public sealed class RosterPropertyTests
     };
 
     // The labels in a random order in which every entry still follows its parents.
-    static string[] Shuffled(World w, Random random)
+    internal static string[] Shuffled(World w, Random random)
     {
         var parents = w.Labels.ToDictionary(l => l, l => w.Entry(l).Body.Prev.Select(h => w.Labels.First(x => w[x].Hash.AsSpan().SequenceEqual(h))).ToArray());
         var left = w.Labels.ToList();
@@ -103,7 +107,7 @@ public sealed class RosterPropertyTests
     // Whether no add or rename arrives with more than RosterVerifier.Window entries it does not
     // descend from already delivered. Past that the arrival window quarantines it by design
     // (devices.md, Quarantine), so the final state depends on delivery order there; see #1435.
-    static bool StaysInWindow(World w, RosterVerifier whole, string[] order)
+    internal static bool StaysInWindow(World w, RosterVerifier whole, string[] order)
     {
         for (var i = 0; i < order.Length; i++)
         {
@@ -115,13 +119,15 @@ public sealed class RosterPropertyTests
         return true;
     }
 
-    static string Summary(World w, RosterVerifier v) =>
+    internal static string Summary(World w, RosterVerifier v) =>
         string.Join(",", w.Active(v)) + "|" + string.Join(",", v.State.Conflicted.Select(w.NameOf).Order(StringComparer.Ordinal))
         + "|" + string.Join(",", v.State.Active.Keys.Select(id => $"{w.NameOf(id)}={v.State.Name(id)}").Order(StringComparer.Ordinal));
 
     [Theory]
     [MemberData(nameof(Scenarios))]
-    public void Every_delivery_order_reaches_the_same_state_and_the_same_verdicts(string scenario)
+    public void Every_delivery_order_reaches_the_same_state_and_the_same_verdicts(string scenario) => DeliveryOrders(scenario);
+
+    internal static void DeliveryOrders(string scenario)
     {
         var w = Builders[scenario]();
         var reference = w.Verifier();
@@ -166,7 +172,9 @@ public sealed class RosterPropertyTests
 
     [Theory]
     [MemberData(nameof(Scenarios))]
-    public void An_entry_is_judged_in_the_state_of_its_ancestors_alone(string scenario)
+    public void An_entry_is_judged_in_the_state_of_its_ancestors_alone(string scenario) => AncestorsAlone(scenario);
+
+    internal static void AncestorsAlone(string scenario)
     {
         var w = Builders[scenario]();
         var whole = w.Verifier();
@@ -181,7 +189,7 @@ public sealed class RosterPropertyTests
         }
     }
 
-    static string Summary(World w, RosterVerifier v, RosterState s) =>
+    internal static string Summary(World w, RosterVerifier v, RosterState s) =>
         string.Join(",", s.Active.Keys.Select(w.NameOf).Order(StringComparer.Ordinal)) + "|"
         + string.Join(",", s.Active.Keys.Where(id => s.IsConfirmed(s.Active[id])).Select(w.NameOf).Order(StringComparer.Ordinal));
 }
