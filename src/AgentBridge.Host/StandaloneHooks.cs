@@ -14,7 +14,7 @@ namespace AgentBridge.Host;
 // registrations and shared runtime; this path never writes anything under the legacy home.
 public sealed class StandaloneHooks(
     string profile, IntakeState.AgentHomes homes, string hookSource, string legacyHome,
-    Func<string?> active, IAgentLocator locator, ICommandRunner codex)
+    Func<string?> active, IAgentLocator locator, ICommandRunner codex, Func<string, string?>? processUsing = null)
 {
     const string OwnerFile = "agent-bridge-owner.json";
     const string Marketplace = "agent-bridge";
@@ -108,7 +108,9 @@ public sealed class StandaloneHooks(
         var found = agent == "codex" && problem is null ? Migrated(state) : null;
         // A read-only check from another flow must not change what a running install or removal uses.
         if (commit) { adopted = found; }
-        if (found is null && Directory.Exists(legacyHome)) { throw new InvalidOperationException("an agent-ha-bridge directory exists and may retain legacy state; inspect it for migration, not fresh hook setup"); }
+        // A full install goes to Migrate and anything unclear refuses; an unused leftover passes here
+        // and is renamed aside by InstallAsync, once every other check has passed (#3644).
+        if (found is null && Directory.Exists(legacyHome) && JudgeLegacy() is var legacy && (removing || legacy.Kind != LegacyKind.Dead)) { throw new InvalidOperationException(legacy.Refusal); }
         if (problem is not null) { throw new InvalidOperationException(problem); }
         if (found is null && (state is { Standalone: false } || File.Exists(Path.Combine(profile, MigrationRecord.FileName))))
         {
@@ -259,7 +261,20 @@ public sealed class StandaloneHooks(
         var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: false);
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
-        if (dryRun) { return; }
+        // Preflight let a leftover through only as unused; it is judged again here, just before it is renamed.
+        var retiring = adopted is null && Directory.Exists(legacyHome);
+        if (dryRun)
+        {
+            if (retiring) { output.WriteLine($"Would rename {legacyHome}, an unused older bridge folder, to {LegacyHome.Target(legacyHome, DateTimeOffset.UtcNow)}."); }
+            return;
+        }
+        if (retiring)
+        {
+            var verdict = JudgeLegacy();
+            if (verdict.Kind != LegacyKind.Dead) { throw new InvalidOperationException(verdict.Refusal); }
+            var moved = LegacyHome.Retire(legacyHome, profile, DateTimeOffset.UtcNow);
+            output.WriteLine($"Retired the unused older bridge folder: renamed '{legacyHome}' to '{moved}'. Undo: Rename-Item -LiteralPath '{moved}' -NewName '{Path.GetFileName(legacyHome)}'");
+        }
         if (agent == "claude" && before is not null)
         {
             var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
@@ -300,6 +315,15 @@ public sealed class StandaloneHooks(
         output.WriteLine(adopted is null ? $"Registered. Restart the host from the {Product.App}, then start new agent sessions to load the hooks."
             : "Registered on the migrated runtime; the host keeps running. Start new Codex sessions to load the hook.");
         if (agent == "codex") { output.WriteLine("Start Codex at this machine and approve its hook trust prompt once; until then Codex silently skips its hooks."); }
+    }
+
+    LegacyVerdict JudgeLegacy() => LegacyHome.Assess(legacyHome, homes, DateTimeOffset.UtcNow, processUsing ?? LegacyHome.ProcessUsing);
+
+    // Undoes a Set up's rename of the legacy folder, if nothing has taken its name since.
+    public void RestoreLegacy(TextWriter output)
+    {
+        using var held = Lock(profile);
+        output.WriteLine($"Restored {LegacyHome.Restore(legacyHome, profile)}. Set up refuses again while it is there; use Migrate, or retire it again with Set up.");
     }
 
     public async Task RemoveAsync(string agent, bool dryRun, TextWriter output, CancellationToken ct = default)

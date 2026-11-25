@@ -8,10 +8,8 @@ using Xunit;
 namespace AgentBridge.App.Tests;
 
 // Execute the actual platform method bodies against offline window/installer contracts.
-// In flight in two of the three App.Tests host hangs on CI, and it sets a process-wide environment variable and compiles with Roslyn
-// behind a static lazy: so it runs ALONE, in a collection with no parallelism, and keeps its coverage (QuarantineTests lists it).
-// That removes a suspected cause of the hang; the root cause is not known to be this.
-[Collection(nameof(RunCompletionTests))]
+// Safe beside other tests (#4104): it sets no process-wide environment variable (the real guard is asked with the agent's
+// session named, LifecycleGuard.Refusal(session)), and its one compile, the first test's, runs on its own thread rather than the thread pool every test shares.
 public sealed class RunCompletionTests : IDisposable
 {
     static readonly Lazy<MethodInfo> run = new(Compile);
@@ -65,16 +63,10 @@ public sealed class RunCompletionTests : IDisposable
     [Fact]
     public void An_agent_caller_is_refused_by_LifecycleGuard_before_anything_is_copied_installed_or_started()
     {
-        var was = Environment.GetEnvironmentVariable("AGENT_BRIDGE_SESSION");
-        Environment.SetEnvironmentVariable("AGENT_BRIDGE_SESSION", "run-completion");
         var ran = false;
-        try
-        {
-            Assert.Contains("nothing was installed", Assert.Throws<TargetInvocationException>(() => Run("Update", false, agent: true)).InnerException!.Message);
-            Assert.Equal(4, new InPlaceHandoff(Path.Combine(folder, "Update.fake"), new(PackageDigest.Sha256, "00"), folder, folder, 1, 2, [])
-                .Run(LifecycleGuard.Refusal, Path.Combine(folder, "staged"), _ => { ran = true; return 0; }, () => [], _ => ran = true, _ => { }));
-        }
-        finally { Environment.SetEnvironmentVariable("AGENT_BRIDGE_SESSION", was); }
+        Assert.Contains("nothing was installed", Assert.Throws<TargetInvocationException>(() => Run("Update", false, agent: true)).InnerException!.Message);
+        Assert.Equal(4, new InPlaceHandoff(Path.Combine(folder, "Update.fake"), new(PackageDigest.Sha256, "00"), folder, folder, 1, 2, [])
+            .Run(() => LifecycleGuard.Refusal("run-completion"), Path.Combine(folder, "staged"), _ => { ran = true; return 0; }, () => [], _ => ran = true, _ => { }));
         Assert.False(ran || Directory.Exists(Path.Combine(folder, "profile")) || Started().Exe is not null);
         Assert.Single(Directory.GetFiles(folder, "run-marker*.json"));
     }
@@ -125,8 +117,9 @@ public sealed class RunCompletionTests : IDisposable
                 public static string Folder = ""; public static bool Clean, Agent; public static string Exe; public static string[] Args;
                 public static void Exit() => Clean = Directory.GetFiles(Folder, "run-marker*.json").Length == 0;
             }
-            // The real guard for an agent caller; a test runner's own ancestry may be an agent's, so a person is stubbed.
-            static class LifecycleGuard { public static string Refusal() => State.Agent ? AgentBridge.App.Core.LifecycleGuard.Refusal() : null; }
+            // The real guard, LifecycleGuard.Refusal(session), for an agent caller, its session named rather than set in the
+            // environment every test shares; a person is stubbed, since a test runner's own ancestry may be an agent's.
+            static class LifecycleGuard { public static string Refusal() => State.Agent ? AgentBridge.App.Core.LifecycleGuard.Refusal("run-completion") : null; }
             static class Program {
                 public static RunMarker Marker = null!;
                 {{Methods("Program.cs", "CompleteRun")}}
@@ -186,11 +179,8 @@ public sealed class RunCompletionTests : IDisposable
             .Append(typeof(RunMarker).Assembly.Location).Distinct().Select(path => MetadataReference.CreateFromFile(path));
         using var output = new MemoryStream();
         var result = CSharpCompilation.Create("RunCompletionProbe", [CSharpSyntaxTree.ParseText(source)], references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)).Emit(output);
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, concurrentBuild: false)).Emit(output);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
         return Assembly.Load(output.ToArray()).GetType("AgentBridge.App.Harness")!.GetMethod("Run")!;
     }
 }
-
-[CollectionDefinition(nameof(RunCompletionTests), DisableParallelization = true)]
-public sealed class RunCompletionCollection;

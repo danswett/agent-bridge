@@ -7,9 +7,10 @@ failing to install (a release the worker could not keep whole; #650).
 
 ## How the PWA ships
 
-`pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI completion.
-Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed; other jobs do not gate.
+`pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI or Full completion.
+Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed, each in the CI run or in the same commit's Full run (full.yml; a Pages deploy waits for FULL, never deploys on CI alone); other jobs do not gate.
 Only Pages-path changes proven on main and newer than a known live APP_VERSION deploy.
+A FULL run that never starts or was cancelled (its concurrency group cancels by arrival, not by commit) leaves the newest commit undeployed and silent; nothing watches FULL directly, but the stale-PWA alarm (`stale-pwa.yml`, #4369/#4466, on main) notices the effect: it compares the served build's time with main's newest `pwa/` commit's time (not the clock), checked every four hours: it fires once that commit is dated more than 24 hours after the served build; a newest commit dated within 24 hours of the served build is not seen until a later `pwa/` commit widens the gap (see "The stale-PWA alarm" below). To unblock it, while that commit is still main's tip, dispatch FULL by hand on main: `gh workflow run full.yml -R danswett/agent-bridge --ref main`. A by-hand FULL run on `main` at that exact commit counts for Pages; a dispatch on any branch never does (write access is needed to dispatch).
 Manual rollback below remains exempt. The build job holds no publishing token; the deploy
 job publishes the artifact, then fetches the live `config.js` and `sw.js` and compares their
 sha256 with the built files, retrying for about five minutes while Pages propagates. A mismatch
@@ -43,6 +44,15 @@ have from the worker's cache, without asking the network (#609).
 Load the PWA, check its build stamp if it shows one, sign in, and answer a test card on a
 disposable host.
 
+## The stale-PWA alarm
+
+**A red `Stale PWA alarm` run** (`stale-pwa.yml`, every four hours and by hand; #4369) means https://app.slipgates.com is serving a build more than 24 hours older than main's newest commit that
+changed `pwa/`, or that the check could not read what it needs. It compares the served `config.js` (`APP_VERSION` is the deployed commit, `BUILT_AT` its time) with that commit, with two read-only GETs and no secret
+(`quality/stale-pwa.ps1`); an unreadable `config.js` or history is red too, never "fresh". It exists because a held deploy is silent: from Nov 12 to 24 the site served a 12-day-old build while every Pages
+run was green (a rollback fence nobody had set was holding the deploys). Its run summary names the served and the newest commit. **To clear it:** open the newest `Pages` runs and read why the gate did not deploy (a
+rollback fence, a failed named PWA job, or a history it could not read); if no rollback was intended, resume with `gh workflow run pages.yml -R danswett/agent-bridge --ref main` (no `ref`, as under Mitigate 2),
+then dispatch `stale-pwa.yml` (or wait for its next run) and check it is green. A deliberate rollback looks the same and alarms until the fix is deployed. It watches only `pwa/` commits, while Pages also deploys
+on `design/fonts/`, the spikes' web files and `pages.yml`, so it stays quiet on a stale site after only those changed.
 ## Afterwards
 
 Rollback state lives in manual Pages run history: one page of at most 100 runs, ordered by creation

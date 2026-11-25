@@ -307,6 +307,18 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    selector's tests), and unclassifiable paths still run product. PRs still test changed tests;
    unknown-base main runs keep the whole ring. There are no push-trigger path filters.
 
+   **A main run records what it relied on (#2454).** Its plan job emits the notice annotation
+   `plan-base: base=<sha> relied-parent=<sha|none>`: the commit the run diffed from, and the in-flight
+   parent run it counted on to test only its own change. Today only `build/select-release-commit.ps1` reads it; the
+   merge rule, main_green and the train selector will read it, so a run counts green only if what it relied on is green
+   too. Today every run records `relied-parent=none`: a run with a proven base diffs from a passed base, and a run
+   with no proven base (the whole ring runs) records the first parent it diffed from without vouching for it. The record
+   comes first, the judges next, and the first-parent shortcut that makes a run rely on its parent last, so nothing
+   changes until the judges honour it.
+   The planner honours it too: a passed run is a base for the next run's diff only if every parent it relied on, back to a run that
+   relied on none, passed as well (a parent that failed or was cancelled never tested its change, so that change stays in the next diff);
+   an unreadable record is not proved, so an older base tests more, never less.
+
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass
    `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
@@ -423,7 +435,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `pwa-unit` with its coverage pass, `pwa-site-csp`, `playwright-apt` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded
      into `plan`, since a failure there would skip every job that needs the plan.
-   - `pwa-ui` runs Playwright on six runners: three Chromium and three WebKit
+   - In `full.yml` (the FULL lane since S2 pieces 5b and 5c, never a merge gate) `pwa-ui` runs Playwright on six runners: three Chromium and three WebKit
      `--shard`s, with `--fully-parallel` so a shard splits by test rather than by file.
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
@@ -471,19 +483,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
      outside these network retry budgets; dpkg is deliberately not wrapped in the network
      timeout. These fakes establish bounds/branches, not hosted cold-run success.
-     To prove that fallback once without waiting for a slow mirror, once this
-     `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
-     start): make a new commit of its own on a throwaway branch from `main` (an empty one,
-     `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
-     request at that commit, and run
-     `gh workflow run ci.yml --ref <branch> -f force-apt-fallback=true`. The plan job fails any
-     run by hand, before checkout, that doesn't ask for the fallback, runs on `main` or a tag,
-     or runs `main`'s head or any open pull request's: its checks, `quality-gate` among them,
-     land on the commit, and the merge rule reads the latest run per head, so on a pull
-     request's head they would stand in for its own run. One started there by mistake still
-     leaves a failed CI run on that head, and since the merge rule takes the newest run,
-     re-running the pull request's older run doesn't clear it: stop and report it, and recover
-     only as Quality or Engineering authorizes. Each `pwa-ui` leg then takes the Azure mirror
+     **The by-hand proof of that fallback has no trigger today.** `ci.yml` no longer runs `pwa-ui` (S2 piece 5c moved it to `full.yml`, #4104), and `full.yml`'s `workflow_dispatch` takes no input at
+      all (#4254's CodeQL fix), so there is no `force-apt-fallback` to pass and no guard that checks a branch's commit. The follow-up (#4508) adds one boolean input with its guard; its text here then
+      gives the command and the rules (a throwaway branch's own new commit, never `main`'s head or an open pull request's, because the checks land on that commit and the merge rule reads the latest run per head,
+      so on a pull request's head they would stand in for its own run; a run started there by mistake leaves a failed run on that head, and re-running the pull request's older run does not clear it: stop and
+      report it, and recover only as Quality or Engineering authorizes). Once it can be run, each `pwa-ui` leg takes the Azure mirror
      off before downloading anything (the action's `force-apt-fallback`; `pwa-e2e` and
      `spikes-linux` download as before), says in its log that it was forced and not timed out,
      fails if apt still fetches a package from Azure, and counts the packages that came from
@@ -495,14 +499,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      that one on an Azure fetch too, and dropped it). A run by hand runs every
      job (the whole ring), but is never a release (the one exception: `critical-release` on main, with a reason,
      docs/app-windows.md "Spacing"); only the archives-only apt cache above may be saved.
-   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
-     It runs only when `spikes/` changes, like `spikes` on Windows.
-   - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
+   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers;
+     `spikes` is the Windows build. Both are in `full.yml`, the FULL lane, since S2 piece 4 (#4104): they never gate a merge.
+   - Caches (#468): `ci.yml` saves NuGet packages for `product` and `ha-integration`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
-     tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
-     `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
-     restores main's, and the nearest older NuGet key when its projects differ. The archives-only
-     apt cache above is the exception, and a PR's entry cannot seed what main restores.
+     tool manifest, and only on `main`'s push runs; a pull request restores main's, and the
+     nearest older NuGet key when its projects differ. `full.yml` (the FULL lane) only restores:
+     NuGet for `spikes`, Playwright's browsers (keyed by Playwright's version) for `spikes-linux`,
+     `pwa-ui` and `pwa-e2e`, and the archives-only apt cache, through the restore-only `playwright-system-packages` action. It runs from a `workflow_run` in the default branch's context, so it never writes a cache (CodeQL's cache-poisoning alerts, S2 piece 4), and no job in `ci.yml` calls the `-save` action any more
+      (the jobs that wrote those keys moved into FULL). **The apt archives cache is written by one workflow, `prime-playwright-cache.yml`** (S2; it lands right after this one): automatically on a push to `main` that
+      changes the action or a package lock, daily, and by hand (`gh workflow run prime-playwright-cache.yml --ref main`); it reads the repository only and saves exactly the key FULL restores, once every `.deb`
+      passed its signed-index check. Until it merges nothing writes that cache, so every FULL job that needs Playwright's system packages (`pwa-ui`, `pwa-e2e`, `spikes-linux`) downloads them all: slower, still correct. A pull request's cache entry cannot seed what the FULL lane restores.
      `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
    - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
@@ -608,12 +615,22 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      A run with no creation time is never skipped. The newest readable run is then judged, so a newer readable failed run still blocks.
      The gh call itself asks once more when gh reports a truncated response ("unexpected end of JSON input") or an empty body, and a
      failure says what gh said and how often it was asked; a 404 or other clean status, and every status post, are asked once.
+     **A run that relied on a parent is green only if that parent is (#2454, item A).** A main run's plan job records `plan-base: base=<sha>
+     relied-parent=<sha|none>`; a run whose record names an in-flight parent counts green only if that parent, and the parent it relied on, back
+     to a run that relied on none, is green by this same rule. A parent that failed, was cancelled, was skipped, has no CI run, or is still
+     running after 2 hours (a zombie: treated as failed) keeps main red even though the child passed, and a later run whose base covers that
+     change (it relies on nothing, or on a green run) clears it. A parent that main's recent runs do not hold is red too, and so is a chain
+     of more than 20 parents. A parent still running within 2 hours is no verdict yet: a run that is green by its own jobs is passed over for
+     an older one, like a run still going, but a run that is red by its own jobs holds main red. A run with no record relied on nothing only
+     if it is older than `main_green.reliance_record_from` (unset: always); from that time on a missing record is an error, since the
+     annotation may not have landed. A record that is not in the shape, a second record on one run, or an unreadable one is an error, as
+     unreadable jobs are.
      A candidate needs a successful completed plan and completed product instances;
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
      does not block; the pull request's own running checks still do. The single
-     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
-     light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
+     `main_green.jobs` list pins exact display names for ha-integration,
+     light and app (`spikes`, `spikes-linux`, `pwa-ui` and `pwa-e2e` left it with S2 pieces 4, 5b and 5c: they are the FULL lane's), including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
      Optional `main_green.leg_families` adds lists of exact alternative check names to
@@ -659,14 +676,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
    - Tiers (#3208): a catalog suite with `tier: post-merge` names exact ci.yml job display names
-     in `tier_jobs` (Arm64 packaging and product's `windows-11-arm` leg, both installers, pwa-ui's
-     WebKit shards and pwa-e2e). The merge rule reads `catalog.yml` beside its rules and counts
+     in `tier_jobs` (Arm64 packaging and product's `windows-11-arm` leg, both installers; pwa-ui's WebKit shards and pwa-e2e were post-merge
+      jobs here until S2 moved them to the FULL lane, which gates no merge). The merge rule reads `catalog.yml` beside its rules and counts
      only blocking jobs: on main a post-merge job never holds, alerts or keeps evidence unusable,
      and the log marks it `[post-merge]`; on a pull request's CI run a post-merge job that
      failed or is running counts as passed and the description adds `post-merge, not counted:`.
      Any other tier, a renamed job, or a missing or unreadable catalog blocks. The arm64 waiver
      applies first, so a waived job still needs its receipt. ci.yml runs post-merge jobs on main
-     and manual runs only (#3209): a pull request leaves out app's and pwa-ui's post-merge legs
+     and manual runs only (#3209): a pull request leaves out app's post-merge legs
      (their matrix include adds them only when the event isn't `pull_request`), skips a job whose
      every leg is post-merge (`github.event_name != 'pull_request' &&` before its gate shape) and
      its quality-gate doesn't count those jobs as selected (the check step's `PR_OFF`). The catalog
@@ -865,46 +882,78 @@ for itself (build once and hand the output over as an artifact is decided after 
 with one `FullyQualifiedName~Class.` term per class it owns. Two things must hold or a test is dropped or run twice, and `ShardPlanner` (`tools/AgentBridge.Quality`)
 is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, and VSTest's
 `~` is a **case-insensitive** contains (`Foo.ATests.` is inside `Foo.aTests.`), so classes like that, by case too, are one unit and travel together (3 of Host.Tests' 175
-classes, 20 pairs across all projects, in run 45303208572's TRX); the planner compares with `OrdinalIgnoreCase` and sorts ordinally. An empty shard's filter is empty text,
-which `dotnet test` reads as no filter, so a caller skips an empty shard. The plan is a pure function of the classes discovered and their recorded seconds, so every shard job computes
-the same plan; a class with no recorded time weighs the median of those that have one, so a new class is spread rather than piled on. Discovery must be the **built
-assembly's, by reflection**, never a scan of the source: the spike's source scan missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran in no
-shard. `dotnet test --list-tests` is not an option either (222 s on Host.Tests alone). A class name the filter language would misread is refused, never dropped. The
-shard legs, the discovery command, the weights file and `quality-gate` failing on a missing or skipped shard are later pieces.
+classes, 20 pairs across all projects, in run 45303208572's TRX); the planner compares with `OrdinalIgnoreCase` and sorts ordinally. The plan is a pure function of
+the classes discovered and their recorded seconds, so every shard job computes the same plan; a class with no recorded time weighs the median of those that have one, so
+a new class is spread rather than piled on. **No discovery step:** a scan of the source missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran
+in no shard, and `dotnet test --list-tests` takes 222 s on Host.Tests alone. So `quality/test-shards.json` has shards 1 to N-1 **list** their classes per project, and
+**shard N is the remainder**: it runs everything not listed, by a negated filter (`FullyQualifiedName!~Class.` for every listed class, `&`-joined), so a new, renamed or
+unlisted class lands there and is never dropped. Small projects are listed whole in a shard; a project listed nowhere runs whole in the remainder.
+`agent-bridge-quality shard-filter --plan FILE --project P --shard I` prints `none`, `all` or the filter, and `--check` reads the plan alone. **An empty shard prints
+`none` and is skipped, never run:** `dotnet test` reads an empty `--filter` as no filter at all, so it would run every test. **What the plan must keep true, refused
+when it is read:** no class in two lists, no two classes in different shards whose terms match each other's tests, case aside (they would run twice), no class name the
+filter language would misread, and every filter under 24,000 characters (Windows' command line is 32 K). The weights file, the shard legs and `quality-gate` failing on
+a missing or skipped shard are later pieces.
 
-**What gates main: two lanes (decided, owner, Nov 23, S2, #4104; the design, not yet built: what exists today is one `ci.yml`, whose `app`
-job self-tests and packs, and the pieces below build it, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
+**What gates main: two lanes (decided, owner, Nov 23, S2, #4104; built in the pieces below, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
 one the merge rule, main-red and the ruleset read (through `quality-gate`): `plan`, `product` (the build and the affected tests, on Windows and on
 Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it compiles; it neither self-tests nor packs). **No `pwa-ui` or
-`pwa-e2e` is to be in it:** the owner's decision A moved WebKit and `pwa-ui` off the merge path. A second workflow, `full.yml` (to be written), is to be the
+`pwa-e2e` is to be in it:** the owner's decision A moved WebKit and `pwa-ui` off the merge path. A second workflow, `full.yml` (built, pieces 4 and 5), is the
 **FULL lane**, which never gates a merge: the x64 app self-test (sharded), `app-pack` and `app-installer` for x64 and Arm64,
 `app (win-arm64)`, `product (windows-11-arm)`, `pwa-ui` and `pwa-e2e` (Chromium and WebKit), `spikes` and `spikes-linux`, and an aggregate
 `full-gate` that, like `quality-gate`, fails when a job it selected was skipped (so a FULL run whose WebKit lane did not run is not a pass).
 * **When FULL is to run.** After each push to `main` whose FAST run passed (a `workflow_run` of `CI`, so it packs as
-  `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1, below them all); a newer push
-  cancels an older FULL run (the latest wins); hourly, for the newest `main` commit that has no FULL run (a `workflow_dispatch`
-  with the commit and its CI run's number); and when the release train dispatches it for a commit it wants to publish.
-* **A red FULL lane is to open an issue** (`full-red.yml`: one per commit, label `full-red`, the failed jobs and their links) and
-  **never holds a merge**: merges continue.
+  `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1, below them all); FULL's concurrency group `full-main` cancels by **arrival, not by commit**: a FULL run that starts later cancels the one in progress, so a slow older commit's FULL
+  can cancel the newest commit's, and then **the newest commit has no FULL run and Pages does not deploy it until the next push**. To re-run it, dispatch FULL by hand on `main` while that commit is still
+  main's tip: `gh workflow run full.yml --ref main` (no input: it tests the tip of `main`). A by-hand FULL run on `main` at the exact commit counts for Pages and the train (`Select-FullRunRow`: `head_branch` is `main`,
+  `head_sha` is that commit), and one on any branch never counts; only people who can run workflows here (write access) can dispatch it. There is no scheduled sweep for a commit without a FULL run and the release train
+  does not dispatch FULL (neither exists yet); cancelling by commit in the workflow is a later follow-up, only if this shows in practice.
+  **A FULL run that never starts, or is cancelled, is silent**: `full-red.yml` alerts on a red job, not on an absent run, and a Pages deploy that waits for it just waits. FULL's own run state is not watched, but the stale-PWA alarm (`stale-pwa.yml`, #4369/#4466, on main) notices the effect: it compares the served build's time with main's newest `pwa/` commit's time (not the clock), checked every four hours: it fires once that commit is dated more than 24 hours after the served build; a newest commit dated within 24 hours of the served build is not seen until a later `pwa/` commit widens the gap.
+  It does not see a FULL run directly, and it is quiet when only a path Pages deploys but `pwa/` does not hold has changed. The PWA runbook (`ops/runbooks/pwa.md`) says how to unblock Pages by hand.
+  **Only for a run it may follow, and on that commit** (enforced by the catalog check, `FullLane.Check`, once `full.yml` exists): every job but the
+  aggregate needs the `trigger` job and runs only when `needs.trigger.outputs.ok == 'true'`; `ok` tests a run by hand, or a `workflow_run` whose
+  conclusion is `success`, whose event is `push`, and whose branch is `main` (the trigger reads the run through this repository's API, so a fork's run never resolves; a pull request's or another
+  branch's run never starts a job); and every checkout is `ref: ${{ needs.trigger.outputs.tested }}` (the trigger reads the CI run's commit through the API and refuses anything but 40 lowercase hex; no other job reads the event's commit) with `persist-credentials: false`.
+* **A red FULL lane opens an issue** (`full-red.yml`: **one open issue per red job**, label `full-red`, a comment on it for each later red commit) and
+  **never holds a merge**: merges continue. It is built (piece 7, `quality/full-red.ps1`, `quality/test-full-red.ps1`, and the workflow `full-red.yml`). It acts only on a Full run **of this repository, on main, started by `workflow_run` or by hand**: a fork's run, a
+  pull request's, and a fork's branch named `main` are passed over, in the script and again in the workflow's `if:`. It finds a job's open issue by the hidden marker
+  `<!-- full-red-job:<name> -->` in its body, never by label (Quality may change labels), so a persistently red job is one issue with a comment per commit, not a
+  flood; a re-run of a recorded commit adds nothing, and when the job passes again it comments once that it is green and leaves the closing to a person. It lists
+  **Blocking** red jobs (x64 anything, the Arm64 pack, any other job) apart from **Waived** ones (the Arm64 self-test, tests and installer: recorded in an issue
+  though the run succeeded, publish continues). The aggregates are never a cause; a run that failed with no failed job behind it (a startup failure, a skipped or
+  cancelled job) is red as `(whole run)`. Job names are cut to a safe alphabet, the only label is `full-red`, and any API error fails the run (only "the label
+  already exists" is let through). The workflow queues its runs (`queue: max`) so a burst of Full completions drops no alert.
 * **What is to read which.** The merge rule's `main_green.jobs` and `main-red` are to name the FAST jobs only, and the catalog is to mark the FULL
   suites `lane: full` with their `full.yml` job names (the validators then read both workflows). The ruleset keeps requiring only
-  `quality-gate` and the merge-rule status.
+  `quality-gate` and the merge-rule status. **The merge rule's side is enforced** (piece 7b, the catalog check, `Completeness`): every job
+  `main_green.jobs` names is a `ci.yml` job, by job or display name, so naming a `full.yml` job (a FULL job never gates a merge) or one no workflow has is a
+  problem. `main-red` reads only the `CI` workflow's runs, so it is on the FAST names by construction.
 * **The release train is to gate publish on FULL** (docs/app-windows.md, "The release train"), and its selector already does
   (`build/select-release-commit.ps1`, fixtures in `build/test-select-release-commit.ps1`, piece 1 and 2): it takes the newest `main` commit whose FAST
   lane **and** FULL lane are green, and publishes FULL's packages, never rebuilding. FULL must show, all succeeded: `full-gate`; the x64 self-test, pack and installer; the
   **Arm64 pack**. **What runs the app on Arm64 is waived** (owner, #2454 and "ship now"): its self-test, its tests and its installer (which installs and
   starts the app, so it is the Arm64 self-test; #4159), **but never silently**: the train's publish summary carries a notice listing every waived Arm64 result
-  (`Format-WaivedNotice`), and `full-red.yml`'s alert (to be written) opens for a red Arm64 job too while publish continues. **x64 stays strict:** its self-test,
+  (`Format-WaivedNotice`), and `full-red.yml`'s alert opens for a red Arm64 job too while publish continues. **x64 stays strict:** its self-test,
   pack, installer and SBOM are each required, and an absent, skipped or cancelled x64 job is no pass. The Arm64 package is never optional,
   and the packages and both SBOMs (the Arm64 one is what attestation needs) must be the FAST run's number, **never FULL's own run number**. FULL's run is found by the
   commit's `head_sha`, never by branch. `publish` is the train's, not `ci.yml`'s. Until the train publishes by itself, "Releases and updates" in docs/app-windows.md
   describes what runs.
-* **Before go-live** (the train relying on FULL): a real `workflow_dispatch` of `full.yml` proves that the run found by `head_sha` is the run that tested
-  that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
+* **Pages waits for FULL** (owner decision B, R8b on #4104: a Pages deploy is a release, so it never goes out on the FAST run alone. It deploys **when the
+  PWA jobs passed in that commit's FULL run**; the rest of FULL being green is the app release's gate, the train's, not Pages'). `pwa-ui` (six legs) and
+  `pwa-e2e` are in `full.yml` (piece 5), and `quality/pages-candidate.ps1` takes them from either lane: a main commit deploys when `plan`,
+  `product (ubuntu-latest)` and every job in `pages-jobs.json` passed, each in the FAST run or in the same commit's FULL run, found by `head_sha`
+  with the release train's own helpers (`Get-FullRunsPath`, `Select-FullRunRow`: a push, a `workflow_run` or a run by hand, on `main` exactly, at that head_sha; the repository scoping comes from the API path, which lists this repository's `full.yml` runs, so no caller passes a repository column). A `workflow_run` run reports main's tip as its head_sha, so an older commit's FULL run is a **by-hand run of `full.yml` on `main`**: `gh workflow run full.yml --ref main` (it tests main's tip, so run it while that is the commit to deploy). Only people who can run workflows on this repository (write access: Quality, Engineering, the owner) can dispatch it, and a dispatch on a **branch never counts** for Pages or the train (a test proves it): no one deploys a branch's PWA by dispatching FULL on it. A FAST run that lacks the PWA jobs, with no FULL run yet,
+  **never deploys**; a job in both lanes, a missing or extra shard, a running or wrong-commit job are refused; only the named jobs count, so a FULL run red
+  elsewhere (spikes, Arm64) does not hold Pages. `pages.yml` passes the lookup (`-GetFull`) and watches `Full` as well as `CI`.
+* **Before go-live** (the train and Pages relying on FULL): a real `workflow_dispatch` of `full.yml`, and a real `workflow_run` one, prove that the run found by
+  `head_sha` is the run that tested that commit (its jobs' checkouts are that sha), **and show the `head_sha` GitHub returns for a `workflow_run` run and for its
+  jobs** (the train and Pages both compare it with the commit; if GitHub returns the default branch's tip there instead, they fail closed and never deploy or
+  publish, which is safe but must be seen once). **It must also compare each job's actual checkout sha with the commit**, since a newer push can land before a
+  `workflow_run` starts and the run can then carry the newer `head_sha` while testing the older commit: the `trigger` job's summary line records the sha it
+  was given, and each job's `actions/checkout` is that sha, so a run that tested another commit than the one it is found for is visible. The first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
-  `full.yml`; (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
-  (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
+  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof has no trigger until the follow-up (#4508) gives `full.yml`'s dispatch its one boolean `force-apt-fallback` (`ci.yml` keeps its `workflow_dispatch` for Quality's critical release only: `critical-release` and `critical-reason`, no `force-apt-fallback`), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+  (7) `full-red.yml`, `main_green` and `main-red` on the FAST names, done. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
 `ci-main` group holds one running and one waiting run, and a newer arrival replaces the waiting one: that is how 3 of 10
@@ -934,8 +983,11 @@ start within about a minute; a queue that grows is the signal to add runners or 
   `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It
   fails closed: a runner is hosted only when every value it can take is on the hosted allowlist (`ubuntu-*`,
   `windows-latest`, `windows-20xx`, `windows-11-arm`, `macos-*`), the self-hosted value is a literal, and the one runtime
-  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `CiRunnerResolutionTests`. This lint
-  passing is a precondition of setting `AB_CI_SELF_HOSTED` to `true`.
+  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `quality/product-os-pin.ps1`. The pin reads
+  `plan.ps1` with the PowerShell parser (`ProductOsPinTests`). It allow-lists command, type and function names and refuses the
+  member and variable forms that reach around them. It catches accidents and plain-text edits; it does not claim to stop
+  deliberately obfuscated PowerShell by an author who can also edit the pin (review does). This lint passing is a precondition of setting
+  `AB_CI_SELF_HOSTED` to `true`.
   **The one alternative to the guard: a run by hand on main.** `(<guard>) || github.event_name == 'workflow_dispatch' &&
   github.ref == 'refs/heads/main' && inputs.use_ab_ci` may also reach the pool, to try it before `AB_CI_SELF_HOSTED` flips.
   `use_ab_ci` must be declared as a **boolean** `workflow_dispatch` input (`type: boolean, default: false`); the lint
@@ -1139,8 +1191,8 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
     UI settlement; it does not extend the wait or replace delivered/byte assertions.
     UI settlement uses the view model's status/tone, independently of the delivery state.
 - **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
-  silently retried to green. The one exception is the pwa-ui WebKit shards, which retry a failed
-  test once in CI (Chromium none): a pass on retry is listed on the run's summary and as a
+  silently retried to green. The one exception is the pwa-ui WebKit shards (in the FULL lane, `full.yml`), which retry a failed
+  test once (Chromium none): a pass on retry is listed on the run's summary and as a
   warning by `pwa/tools/flaky-report.mjs`, so it is reported, not hidden.
   The [Fleet register's quarantine rule](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md)
   governs eligibility: a named test, ARM included, needs three failures on three

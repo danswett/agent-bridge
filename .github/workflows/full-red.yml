@@ -1,0 +1,46 @@
+name: Full red
+
+# The alert for a red FULL lane (quality/README.md section 4.7; S2, #4104): one open issue per red job, labelled full-red, a comment on it for each later
+# red commit, the blocking jobs apart from the Arm64 results the owner waived. It never holds a merge.
+on:
+  # Reads a finished Full run on main only; runs main's copy of the script and never checks out the run's code.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [Full]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    # Only this repository's own Full run on main, made by workflow_run or by hand: the branches filter alone also matches a fork's pull request whose
+    # branch is named main. (Full's own event is workflow_run, not push, which main-red's CI-watching guard tests.) The script checks the same.
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'main' &&
+      (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')
+    # Queued, not dropped: with a plain group GitHub keeps one pending run and drops the rest, and a dropped run is a dropped alert. One at a time, so two runs
+    # never race to open the same job's issue. At job level, where build/actionlint-findings.ps1 lets actionlint's queue-key error through.
+    concurrency:
+      group: full-red
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: quality
+      - name: Open or update each red job's issue
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: pwsh -NoProfile -File quality/full-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY

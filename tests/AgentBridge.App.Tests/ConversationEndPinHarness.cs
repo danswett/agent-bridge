@@ -226,6 +226,8 @@ namespace AgentBridge.App
         public bool HistoryDrawing => historyDraw?.IsRunning == true;
         public void FirstFrameForProbe() => historyFirstFrame?.Invoke(this, new());
         public void DrawEarlierForProbe() => DrawEarlier();
+        public void KeepPlaceOfTurnForProbe(string id, double top) { KeepPlace(false, Scroller.VerticalOffset, (id, top)); DrainForProbe(); }
+        public void RealizeRowsForProbe(Func<int, Microsoft.UI.Xaml.UIElement?> realize) => HistoryRows.Realize = realize;
         public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
         public void AnchorForProbe(double to) => Anchoring(Scroller, to);
         public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; anchorHeld = false; }
@@ -250,12 +252,13 @@ namespace AgentBridge.App
             WatchHistory();
             Scroller.VerticalOffset = 0;
         }
-        public void PrepareHistoryForProbe()
+        public void PrepareHistoryForProbe(int olderTurns = 0)
         {
             var connection = new Core.HostConnection(
                 _ => Task.FromException<AgentBridge.Local.LocalChannel>(new InvalidOperationException("Offline probe cannot connect.")),
                 new LockedDispatcher());
             var stored = new Core.SessionHistory(connection, "probe");
+            for (var i = olderTurns; i > 0; i--) { stored.AddLive(new() { Id = $"older{i}", At = default, Prompt = new() { Text = $"Older prompt {i}" } }); }
             stored.AddLive(new() { Id = "older", At = default, Prompt = new() { Text = "Older prompt" } });
             stored.AddLive(new() { Id = "newer", At = default, Prompt = new() { Text = "Newer prompt" } });
             Card = new("probe", stored);
@@ -286,8 +289,9 @@ namespace AgentBridge.App
         }
         sealed class ProbeRows
         {
-            public Microsoft.UI.Xaml.UIElement? TryGetElement(int index) => null;
-            public Microsoft.UI.Xaml.UIElement? GetOrCreateElement(int index) => null;
+            public Func<int, Microsoft.UI.Xaml.UIElement?>? Realize { get; set; }
+            public Microsoft.UI.Xaml.UIElement? TryGetElement(int index) => Realize?.Invoke(index);
+            public Microsoft.UI.Xaml.UIElement? GetOrCreateElement(int index) => Realize?.Invoke(index);
         }
     }
 

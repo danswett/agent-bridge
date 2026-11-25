@@ -1355,7 +1355,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (provenance.ReserveFleet(key, sessionId, provenance.RoleFor(plan.Role, agentPrincipal), fleetLimits, options.Time.GetUtcNow(), id => source.ProcessOf(id)) is { } full)
                 { return Refused(full); }
             }
-            else { provenance.Preparing(key, sessionId, fleet ? "fleet" : null, provenance.RoleFor(plan.Role, agentPrincipal), supersedes: fleetResume); }
+            else
+            {
+                provenance.Preparing(key, sessionId, fleet ? "fleet" : null,
+                    provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
+            }
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)

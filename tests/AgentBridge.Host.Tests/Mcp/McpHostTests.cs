@@ -322,6 +322,48 @@ public sealed class McpHostTests : IDisposable
         Assert.Equal("a [redacted] b", McpHost.Scrub("a s3cr3t b", "s3cr3t"));
     }
 
+    // --- #4471 (follow-ups of the #4463 read) ---
+
+    [Fact]
+    public void The_cut_never_leaves_half_of_a_surrogate_pair_and_a_token_at_the_cut_is_redacted_whole()
+    {
+        var emoji = McpHost.Scrub(new string('a', McpHost.MaxHostText - 1) + "😀 and more", null);
+        Assert.True(emoji.Length <= McpHost.MaxHostText + 1);
+        Assert.DoesNotContain(emoji, c => char.IsSurrogate(c));
+        Assert.EndsWith("…", emoji);
+        var token = McpHost.Scrub(new string('a', McpHost.MaxHostText - 8) + " abat1_SECRETSECRETSECRET tail", null);
+        Assert.DoesNotContain("abat1_", token);
+        Assert.DoesNotContain("SECRET", token);
+    }
+
+    [Theory]
+    [InlineData("a\u2028b\u2029c", "a b c")]
+    [InlineData("a\u202Eb", "a b")]
+    [InlineData("a\u200Bb\u200Dc\uFEFFd", "a b c d")]
+    [InlineData("red \u001B[31mtext\u001B[0m ok", "red text ok")]
+    public void Line_separators_bidi_and_zero_width_characters_are_flattened_and_an_escape_sequence_is_removed_whole(string said, string expected) =>
+        Assert.Equal(expected, McpHost.Scrub(said, null));
+
+    // After the open the token is not forgotten: a short, unprefixed value this server sent is redacted from a later refusal too.
+    [Fact]
+    public async Task A_short_token_this_server_sent_is_also_redacted_from_a_later_refusal()
+    {
+        await using var server = Serve((op, data) => op == "host.stop" ? throw new InvalidOperationException("refused: nobody holds hunter2 here") : Normal(op, data));
+        await using var host = await McpHost.OpenAsync(server.Endpoint, "hunter2", TimeSpan.FromSeconds(5));
+        var e = await Assert.ThrowsAsync<McpToolException>(() => host.CallAsync("host.stop"));
+        Assert.DoesNotContain("hunter2", e.Message);
+        Assert.Contains("nobody holds", e.Message);
+    }
+
+    [Fact]
+    public async Task A_hello_the_host_refuses_with_a_token_in_its_words_is_scrubbed_at_the_open()
+    {
+        await using var server = Serve((op, data) => op == "hello" ? throw new InvalidOperationException("refused: unknown credential abat1_AbCdEf0123456789xyz for hunter2") : Normal(op, data));
+        var e = await Assert.ThrowsAnyAsync<McpToolException>(() => McpHost.OpenAsync(server.Endpoint, "hunter2", TimeSpan.FromSeconds(5)));
+        Assert.DoesNotContain("abat1_AbCdEf", e.Message);
+        Assert.DoesNotContain("hunter2", e.Message);
+    }
+
     // An explicit name or socket path that the kernel or Windows would read differently from what was typed finds no host.
     [Theory]
     [InlineData("x.")]

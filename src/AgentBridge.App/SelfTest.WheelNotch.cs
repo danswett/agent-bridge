@@ -21,6 +21,24 @@ static partial class SelfTest
             Text = n % 3 == 0 ? $"Ran tool {n}:\n\n```\n{string.Join("\n", Enumerable.Range(1, 18).Select(l => $"line {l} of tool output {n}"))}\n```" : $"Reply {n}, short." } },
     };
 
+    // Only this stage, with the frame trace left beside <out> as <out>.wheel-notch.json: for reproducing a flake with the whole trace (the CI artifact carries none). Control-level notches, so
+    // no OS input is sent. Run it with --self-test-wheel-notch <out>.
+    public static async Task RunWheelNotchAsync(MainWindow window, MainViewModel main, DemoHost demo, string outFile, Action<int> exit)
+    {
+        var (passed, failed) = (new List<string>(), new List<string>());
+        void Check(bool ok, string what)
+        {
+            (ok ? passed : failed).Add(what);
+            if (!ok) { AppLog.Write($"self-test: failed: {what}"); }
+        }
+        // The whole self-test has loaded the window by the time it gets here; on its own, wait until the window has a XamlRoot.
+        await Until(() => window.RootElement.XamlRoot is not null, TimeSpan.FromSeconds(15));
+        try { await CheckWheelNotches(window, main, demo, Check, outFile); }
+        catch (Exception e) { Check(false, $"wheel notch crashed: {e}"); }
+        await Write(outFile, new Dictionary<string, object?>(), passed, failed, null);
+        exit(failed.Count == 0 ? 0 : 1);
+    }
+
     static async Task CheckWheelNotches(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile)
     {
         window.ShowPage("sessions");
@@ -83,15 +101,16 @@ static partial class SelfTest
             // Measured from the end, as the person sees it: older turns drawn above during a notch raise the offset by
             // their height while what is read stays put (CI 45303880104 read -660, -306, … as raw offset). Eight notches
             // stay within the first viewport above the end, where every row below is already laid out.
-            var moved = new List<double>();
+            var (moved, grew) = (new List<double>(), new List<double>());     // grew: the extent's change per notch, so a short notch can be told from a lost prepend
             for (var n = 0; n < 8; n++)
             {
-                var fromEnd = scroll.ScrollableHeight - scroll.VerticalOffset;
+                var (fromEnd, extentBefore) = (scroll.ScrollableHeight - scroll.VerticalOffset, scroll.ScrollableHeight);
                 var (_, to, _) = await Notch(-1);
-                if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); }
+                if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); grew.Add(Math.Round(scroll.ScrollableHeight - extentBefore)); }
             }
-            check(moved.Count >= 4 && moved.All(d => Math.Abs(d - notch) <= 1.5),
-                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws (moved {string.Join(", ", moved)})");
+            var notchFailure = WheelNotchRule.Failure(moved, notch);   // each notch within 4 px, the notches together within 1 px each on average (the owner's call, #4500)
+            check(notchFailure is null,
+                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws ({notchFailure ?? "within the rule"}; moved {string.Join(", ", moved)}; extent grew {string.Join(", ", grew)})");
             phase = "down";
             var (offsets, back) = (new List<double>(), 0.0);
             var high = scroll.VerticalOffset;
@@ -102,11 +121,56 @@ static partial class SelfTest
                 high = Math.Max(high, scroll.VerticalOffset);
                 offsets.Add(Math.Round(scroll.VerticalOffset, 1));
             }
-            phase = "quiet";
-            var gap = 0.0;
-            for (var n = 0; n < 60; n++) { await Frame(); gap = Math.Max(gap, scroll.ScrollableHeight - scroll.VerticalOffset); }
-            check(back <= 1.5 && gap <= 1.5,
-                $"wheel down to the end: never moves back up and stays at the end (worst back {back:0.#}, quiet gap {gap:0.#}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+            // Judged by STATE, not by how long the view takes: the worst distance from the end over a fixed 60 frames failed about one main run in three on a loaded hosted runner (quiet gap 771,
+            // 1833) while the worst back stayed 0. Settled = a run of rendered frames at the end, not moving, offset and extent unchanged; never moving back up stays strict, across the
+            // notches above and every frame here (ScrollSettle, tested in App.Tests). The wall clock is only a backstop so a view that never arrives fails instead of hanging the run.
+            phase = "settle";
+            var settle = new ScrollSettle(high, back);
+            var (settleFrom, giveUp) = (clock.Elapsed, clock.Elapsed + TimeSpan.FromSeconds(90));
+            while (!settle.Done && clock.Elapsed < giveUp) { await Frame(); settle.Observe(scroll.VerticalOffset, scroll.ScrollableHeight, moving); }
+            check(settle.Passed,
+                $"wheel down to the end: never moves back up and stays at the end ({settle.Describe()}, {(clock.Elapsed - settleFrom).TotalSeconds:0.#} s, pin {view.PinState()}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+            // The owner's wheel (#4243): real OS notches (120 each; Windows animates every one) at the transcript centre, the pointer over it, in
+            // the shapes a hand makes: three within a frame, a quick run, a slow run past the 250 ms the wheel's start window lasts. Once with the
+            // transcript idle, once with turns arriving while it spins. Never back up, and at the end once it stops.
+            if (RealWheelSkip() is { } skipped) { check(true, $"real wheel down to the end: skipped ({skipped})"); }
+            else
+            {
+                var centre = scroll.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(scroll.ViewportWidth / 2, scroll.ViewportHeight / 2));
+                var (scale, at) = (scroll.XamlRoot.RasterizationScale, new WheelPoint());
+                at.X = (int)(centre.X * scale); at.Y = (int)(centre.Y * scale);
+                if (ClientToScreen(window.Handle, ref at) == 0) { check(false, "real wheel setup: the transcript centre could not be located"); return; }
+                try
+                {
+                    WatchWheel();
+                    PointRealWheel(window.Handle, at.X, at.Y);
+                    var next = 301;
+                    foreach (var growing in new[] { false, true })
+                    {
+                        phase = growing ? "real-wheel:growing" : "real-wheel:idle";
+                        for (var n = 0; n < 8; n++) { await Notch(-1); }
+                        var (peak, fall, start) = (scroll.VerticalOffset, 0.0, scroll.VerticalOffset);
+                        async Task Pause(int ms)
+                        {
+                            var until = clock.ElapsedMilliseconds + ms;
+                            do { var seen = await Frame(); (fall, peak) = (Math.Max(fall, peak - seen), Math.Max(peak, seen)); } while (clock.ElapsedMilliseconds < until);
+                        }
+                        var bursts = new[] { (3, 100), (1, 40), (1, 40), (1, 40), (1, 300), (1, 300), (2, 150), (1, 30), (1, 30), (1, 300), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80) };
+                        for (var i = 0; i < bursts.Length; i++)
+                        {
+                            SendWheelNotches(-120, bursts[i].Item1);
+                            if (growing && i < 10 && i % 3 == 0) { stored.AddLive(MixedTurn(next++)); }
+                            await Pause(bursts[i].Item2);
+                        }
+                        check(peak - start > notch, $"real wheel reaches the transcript ({(growing ? "turns arriving" : "idle")}; from {start:0.#} to {peak:0.#}; this thread took {wheelTaken} wheel messages)");
+                        var arrive = new ScrollSettle(peak, fall);
+                        var arriveBy = clock.Elapsed + TimeSpan.FromSeconds(90);
+                        while (!arrive.Done && clock.Elapsed < arriveBy) { await Frame(); arrive.Observe(scroll.VerticalOffset, scroll.ScrollableHeight, moving); }
+                        check(arrive.Passed, $"real wheel down to the end, {(growing ? "turns arriving" : "idle")}: never moves back up and rests at the end ({arrive.Describe()}; pin {view.PinState()})");
+                    }
+                }
+                finally { StopWatchingWheel(); }
+            }
         }
         finally
         {

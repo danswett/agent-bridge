@@ -654,6 +654,11 @@ async Task<int> ServeAsync(HostHandover handover)
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), () => liteKill.On, () => identity.Account?.AccountId, launcher, identity.Folder, identity.Key, Log, drivers, deliveryGate);
+    // S6: the lane pump stops draining once a stop holds the delivery fence (or a restart commits), never before: a refused stop
+    // leaves the host running and the pump must go on. It and its composition end with the host run, the pump first.
+    plannedStops.StopHeld = () => liteDeliver.Pump?.BeginStop();
+    using var laneComposition = liteDeliver.Composition;
+    await using var lanePump = liteDeliver.Pump;
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -927,7 +932,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Dev = IsDevBuild(),
         Elevated = PeerPolicy.SelfElevated(),
         Machine = machine,
-        Running = HostControl.Settings(settings, HostConfigFile.ReadName(identity.Folder)),
+        Running = HostControl.Settings(settings, HostConfigFile.ReadName(identity.Folder), identity.Folder),
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         ApplyRemoteFolderTrust = on =>
@@ -1007,6 +1012,7 @@ async Task<int> ServeAsync(HostHandover handover)
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
     AgentPipeLaunch? grantPipe = null;
     FleetStopCommands? fleetStop = null;
+    FleetResumeCommands? fleetResume = null;
     AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null;
     if (agentCredentials is { } grantCredentials)
     {
@@ -1029,8 +1035,12 @@ async Task<int> ServeAsync(HostHandover handover)
             fleetStop = new FleetStopCommands(identity.Folder, identity.Key, () => identity.Account?.AccountId,
                 Wire.DeviceId(identity.Key.Public), grantCredentials, service, source, fleetStopper);
         }
+        // Resume in place for a coordinator (#4318): the launch record decides who is a coordinator and what the session was.
+        fleetResume = new FleetResumeCommands(identity.Folder, grantCredentials, launcher.LaunchRole, launcher.WasFleetLaunched,
+            id => source.Get(id) is not null, restore.RecordedLaunch, (ask, ct) => launcher.ResumeFleetAsync(ask, ct), fleetNames.Get);
     }
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, remoteLaunch: remoteLaunch), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, fleetResume: fleetResume, remoteLaunch: remoteLaunch,
+        scriptAdmission: agentCredentials is null ? null : new ScriptAdmission(agentCredentials, agentAudit)), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

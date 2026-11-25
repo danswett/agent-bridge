@@ -44,6 +44,18 @@ const visibility = (page, visible) => page.evaluate((visible) => {
   document.dispatchEvent(new Event('visibilitychange'));
 }, visible);
 
+// Moves a paused fake clock on in whole steps until the page's state is what is wanted, then asserts on that state. The number of steps is fixed, so a slow runner can't end it early: expect.poll gave up after 5000 real ms,
+// having stepped the clock only a few times (#4572). The steps (1 s in all) stay inside every sign-in timer (the ticker's 5 s, a held code's 10 s).
+async function runClockUntil(page, read, wanted, { step = 10, steps = 100 } = {}) {
+  let seen;
+  for (let n = 0; n < steps; n++) {
+    await page.clock.runFor(step);
+    seen = await page.evaluate(read);
+    if (seen === wanted) { return; }
+  }
+  expect(seen).toBe(wanted);
+}
+
 test('hidden banners stop ticking, catch up once, and still receive sign-in completion', async ({ page }) => {
   await page.clock.install();
   await openDemo(page);
@@ -458,10 +470,7 @@ for (const attempt of ['retry', 'start']) {
       const h = window.agentBridgeDemo.host;
       h.frame({ ev: 'signin.code', seq: h.seq + 1, data: { flow: 'late-flow', agent: 'copilot', userCode: 'LATE-CODE', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() } });
     });
-    await expect.poll(async () => {
-      await page.clock.runFor(1);
-      return page.evaluate(() => window.agentBridgeDemo.signInCodesHeld);
-    }).toBe(1);
+    await runClockUntil(page, () => window.agentBridgeDemo.signInCodesHeld, 1);
     await visibility(page, false);
     // The host stops offering this device sign-in while the cancel finishes.
     await page.evaluate(() => {
@@ -469,10 +478,7 @@ for (const attempt of ['retry', 'start']) {
       const s = d.host.get('signin-1');
       d.upsert({ ...s, attention: { ...s.attention, signIn: 'unknown', since: new Date().toISOString() } });
     });
-    await expect.poll(async () => {
-      await page.clock.runFor(1);
-      return page.evaluate(() => window.agentBridgeDemo.hosts.link('demo').store.get('signin-1').attention.signIn);
-    }).toBeNull();
+    await runClockUntil(page, () => window.agentBridgeDemo.hosts.link('demo').store.get('signin-1').attention.signIn, null);
     await page.evaluate(() => window.__releaseSignInCancel());
     await expect(sheet(page)).toBeHidden();
     expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
