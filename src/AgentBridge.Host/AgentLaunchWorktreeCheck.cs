@@ -4,11 +4,24 @@ namespace AgentBridge.Host;
 
 public static class AgentLaunchWorktreeCheck
 {
+    // What each agent could load from a project folder; presence is the refusal. Each name's source, and what this check
+    // cannot guarantee, is in docs/design/agent-launch-scope.md section 3.
+    static readonly string[] Claude = [".claude", ".mcp.json"];
+    static readonly string[] CodexOwn = [".codex", ".agents", ".codex-plugin", ".claude-plugin", ".cursor-plugin"];
+    // In the repository, Claude's names too: Codex can import them, and reads .mcp.json under a plugin folder.
+    static readonly string[] Codex = [.. CodexOwn, .. Claude];
+    const string ClaudeRefusal = "The repository contains Claude project configuration; agent launch is refused.";
+    const string CodexRefusal = "The repository contains project configuration Codex could load; agent launch is refused.";
+
     // Read-only W1 check. The launch service owns refusal, audit, cleanup and cap release (W2).
-    public static string? Check(WorkspaceConfig workspace, WorktreeResult created, string agent)
+    public static string? Check(WorkspaceConfig workspace, WorktreeResult created, string agent) =>
+        Check(workspace, created, agent, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    internal static string? Check(WorkspaceConfig workspace, WorktreeResult created, string agent, string profile)
     {
         if (!workspace.Isolate) { return "Agent launches require an isolated workspace."; }
-        if (agent != "claude") { return "This agent has no confirmed project configuration list for agent launches."; }
+        if (agent is not ("claude" or "codex")) { return "This agent has no confirmed project configuration list for agent launches."; }
+        var (names, refusal) = agent == "codex" ? (Codex, CodexRefusal) : (Claude, ClaudeRefusal);
         if (created.Problem is not null || created.Worktree is null || created.Path is null)
         {
             return "A fresh isolated worktree was not created.";
@@ -37,8 +50,8 @@ public static class AgentLaunchWorktreeCheck
             if (!branch.Ran || branch.ExitCode != 1) { return "The isolated worktree must have a verified detached HEAD."; }
 
             // Presence, not the JSON contents, is the policy. Do not follow links while looking.
-            if (Configuration(tree, recursive: true) is { } problem) { return problem; }
-            // Claude can read main-checkout local settings even when it starts in a worktree.
+            if (Configuration(tree, names, _ => refusal, recursive: true) is { } problem) { return problem; }
+            // Claude can read main-checkout local settings, and Codex its hooks, even when started in a worktree.
             var listed = Git.Run(tree, ["worktree", "list", "--porcelain", "-z"]);
             var first = listed.Output.Split('\0')[0];
             if (!listed.Ok || !first.StartsWith("worktree ", StringComparison.Ordinal)
@@ -46,7 +59,19 @@ public static class AgentLaunchWorktreeCheck
             {
                 return "The main checkout's project configuration cannot be verified.";
             }
-            if (Configuration(primary, recursive: false) is { } inherited) { return inherited; }
+            if (Configuration(primary, names, _ => refusal, recursive: false) is { } inherited) { return inherited; }
+            if (agent == "codex")
+            {
+                // The hooks come from the main checkout's copy of every folder down to the launch folder.
+                var folder = primary;
+                foreach (var part in relative.Split(Path.DirectorySeparatorChar))
+                {
+                    folder = Path.Combine(folder, part);
+                    if (Directory.Exists(folder) && Configuration(folder, names, _ => refusal, recursive: false) is { } nested) { return nested; }
+                }
+                var home = Folders.Physical(profile);
+                if ((Above(tree, home) ?? Above(primary, home)) is { } above) { return above; }
+            }
 
             var status = Git.Run(tree, ["--no-optional-locks", "-c", "core.fsmonitor=false", "status",
                 "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"]);
@@ -71,7 +96,20 @@ public static class AgentLaunchWorktreeCheck
         return result.Ok ? Folders.Physical(result.Output.Trim()) : null;
     }
 
-    static string? Configuration(string root, bool recursive)
+    // Codex's own loader stops at the project root. A folder above it is refused anyway, short of the user profile, whose
+    // .codex and .agents are the person's own settings. Claude's names are left out: Codex reads none of them there.
+    static string? Above(string path, string? profile)
+    {
+        for (var folder = Path.GetDirectoryName(path); folder is not null && (profile is null || !Folders.Same(folder, profile));
+            folder = Path.GetDirectoryName(folder))
+        {
+            if (Configuration(folder, CodexOwn, name => $"A folder above the worktree or main checkout holds {name}, which Codex could load; agent launch is refused.",
+                recursive: false) is { } problem) { return problem; }
+        }
+        return null;
+    }
+
+    static string? Configuration(string root, string[] names, Func<string, string> refuse, bool recursive)
     {
         var pending = new Stack<string>();
         pending.Push(root);
@@ -80,10 +118,9 @@ public static class AgentLaunchWorktreeCheck
             foreach (var entry in new DirectoryInfo(folder).EnumerateFileSystemInfos())
             {
                 if (Folders.Same(folder, root) && entry.Name == ".git") { continue; }
-                if (string.Equals(entry.Name, ".claude", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(entry.Name, ".mcp.json", StringComparison.OrdinalIgnoreCase))
+                if (names.FirstOrDefault(n => string.Equals(entry.Name, n, StringComparison.OrdinalIgnoreCase)) is { } name)
                 {
-                    return "The repository contains Claude project configuration; agent launch is refused.";
+                    return refuse(name);
                 }
                 if (!recursive) { continue; }
                 if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)

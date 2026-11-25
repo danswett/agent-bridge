@@ -1,8 +1,12 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Launch;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Fleet.Grants;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Xunit;
 
 [Trait("Category", "Process")]
@@ -94,6 +98,112 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
             .GetProperty("credential").GetProperty("scope").GetString());
         var rows = File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(profile, "audit"), "launches-*.jsonl")));
         Assert.All(rows.Skip(1), row => Assert.Equal("fleet", JsonDocument.Parse(row).RootElement.GetProperty("grant").GetString()));
+    }
+
+    // #3644: a Codex fleet worker meets the worktree check with its own configuration list. The check's answer is read here, not
+    // only the launch's outcome: what follows the check (a Codex launch's credential) is not this check's to decide.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_codex_fleet_worker_passes_the_worktree_check_unless_the_repository_holds_codex_configuration(bool configured)
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.exe";
+        Directory.CreateDirectory(f.CodexRegistrations);
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        if (configured)
+        {
+            Directory.CreateDirectory(Path.Combine(app, ".codex"));
+            File.WriteAllText(Path.Combine(app, ".codex", "config.toml"), "approval_policy = \"never\"\n");
+        }
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        (starter.Registers, starter.ExitsAtOnce) = (false, true);
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        var config = Config(c => c with { Workspaces = [new("App", app, true)] });
+        var answers = new List<string?>();
+        var launcher = Launcher(config, credentials: new AgentCredentials(profile, "machine"), agentWorktreeCheck: (workspace, made, agent) =>
+            { answers.Add(AgentLaunchWorktreeCheck.Check(workspace, made, agent, f.Root)); return answers[^1]; },
+            agentWorktreeRefusalAudit: (_, _, _) => true);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "codex", Workspace = "App", Permissions = LaunchProtocol.AllowAll, Prompt = "fixture" };
+        const string principal = "script:machine/dispatcher";
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile), new("local", "agent", principal, null), fleet: true, refusal: () => null);
+
+        var answer = Assert.Single(answers);
+        if (!configured) { Assert.Null(answer); return; }
+        Assert.Contains("Codex could load", answer);
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Empty(starter.Specs);
+        Assert.Empty(Directory.GetDirectories(config.WorktreeRoot));
+    }
+
+    // #3644: an agent's launch, a local grant's and a fleet.launch from another host reach the launcher without the fleet flag.
+    // Codex is given no worker credential there, so it must not start; Claude, which is given one, is the control.
+    [Theory]
+    [InlineData("codex", "local-grant", "allowAll")]
+    [InlineData("codex", "local-grant", "ask")]
+    [InlineData("codex", "fleet.launch", "allowAll")]
+    [InlineData("codex", "fleet.launch", "ask")]
+    [InlineData("codex", "agent", "ask")]
+    [InlineData("claude", "local-grant", "allowAll")]
+    [InlineData("claude", "fleet.launch", "allowAll")]
+    [InlineData("claude", "agent", "ask")]
+    public async Task An_agent_or_granted_launch_starts_only_with_a_worker_credential(string agent, string route, string permissions)
+    {
+        locator.Installed[agent] = $@"C:\fake\{agent}.exe";
+        Directory.CreateDirectory(f.CodexRegistrations);
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        var profile = Directory.CreateDirectory(Path.Combine(f.Root, "grant-profile")).FullName;
+        File.WriteAllText(Path.Combine(profile, HostSettings.FileName), JsonSerializer.Serialize(new
+        {
+            agents = new { enabled = true, launch = new { enabled = true },
+                limits = new { launchesPerOriginPerHour = 3, launchesPerMachinePerHour = 10, liveAgentLaunched = 6, agentLaunchedIdleHours = 2 },
+                inbound = new { local = new { launch = new { workspaces = new[] { "App" }, permissions = "ask", agents = new[] { agent }, allowAllLaunch = true } } } },
+            launch = new { workspaces = new[] { new { label = "App", path = app, isolate = true } } },
+        }));
+        var (config, credentials) = (Config(c => c with { Workspaces = [new("App", app, true)] }), new AgentCredentials(profile, "machine"));
+        var answers = new List<string?>();
+        var launcher = Launcher(config, credentials: credentials, agentWorktreeCheck: (workspace, made, id) =>
+            { answers.Add(AgentLaunchWorktreeCheck.Check(workspace, made, id, f.Root)); return answers[^1]; },
+            agentWorktreeRefusalAudit: (_, _, _) => true);
+        launcher.NamedLaunch = (_, _, run) => run();
+        (starter.Registers, starter.ExitsAtOnce) = (false, true);
+        using var key = P256KeyPair.Generate();
+        var ((requests, problem), device) = (LaunchRequestStore.Open(profile, TimeProvider.System), new string('a', 32));
+        var pipe = new AgentPipeLaunch(profile, credentials, new SessionService(source, new("machine", "fixture", "windows", "1"), launcher: launcher),
+            new AgentAuditLog(profile) { DeviceKey = key }, requests, problem,
+            fleetGrants: new FleetGrantLaunch(profile, key, () => "123", device, credentials, launcher));
+        var now = DateTimeOffset.UtcNow;
+        var token = credentials.Mint(Guid.NewGuid().ToString("D"), "person-launch", 100, now, AgentProtocol.ScopeReadReplyLaunch);
+        var caller = credentials.Check(token, new ProcessAncestry([new PeerProcess(100, now, "agent.exe")], true)).Accepted!;
+        var subject = route == "fleet.launch"
+            ? new GrantSubject("123", new('b', 32), Guid.NewGuid().ToString("D"), "AQEBAQEBAQEBAQEBAQEBAQ", new(4242, now.AddMinutes(-5)))
+            : new GrantSubject("123", device, caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc));
+        var offered = (await launcher.OptionsAsync()).Agents.Single(a => a.Id == agent);
+        var scope = new GrantScope([device], ["App"], [agent], [.. offered.Models], ["default"], [.. offered.Efforts], [.. offered.Contexts], ["ask", "allowAll"]);
+        var grant = new GrantDocument(1, Guid.NewGuid(), "123", new("123", device, "AQ", now, new('a', 64)), new(device, Path.GetFileName(profile)),
+            [subject], ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8), AllowAllLaunch: true);
+        Assert.True(new GrantStore(profile, key, new(profile), scope).Issue(grant).Usable);
+        var input = new FleetLaunchInput(1, Guid.NewGuid(), grant.Id, "SG Builder 1", "App", agent, Model: offered.Models[0],
+            Effort: offered.Efforts[0], Context: offered.Contexts[0], Permissions: permissions, Prompt: "fixture");
+        var request = new LaunchRequest { Request = input.Request.ToString("D"), Agent = agent, Workspace = "App", Permissions = permissions, Prompt = "fixture" };
+
+        var result = route switch
+        {
+            "fleet.launch" => (await pipe.LaunchGrantedRemoteAsync(subject, input)).Result,
+            "local-grant" => (await pipe.LaunchGrantedAsync(caller, JsonSerializer.SerializeToElement(input, ProtocolJson.Options))).Result,
+            _ => await pipe.LaunchAsync(caller, JsonSerializer.SerializeToElement(request, ProtocolJson.Options)),
+        };
+
+        // The launch got past the worktree check, so what follows is the credential rule's answer.
+        Assert.True(answers.Count == 1 && answers[0] is null, $"{result.Outcome}: {result.Reason}; check: {string.Join(" | ", answers)}");
+        if (agent == "claude") { Assert.NotNull(Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]); return; }
+        Assert.Empty(starter.Specs);
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Empty(Directory.GetDirectories(config.WorktreeRoot));
     }
 
     // #4318: the role a fleet launch records goes through RoleFor, never the request's own role: a launch by an agent (or script)

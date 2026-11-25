@@ -215,13 +215,13 @@ repository) still apply, as they do to every session the person launches. Shippi
 narrower meaning is an owner decision (§12, question 8).
 
 **Which agents an agent may launch in v1.** Each needs a list of the repository paths through
-which it reads permissions, hooks, tools or MCP servers, confirmed by #1404 from the agent's own
-documentation and `--help` and kept as test vectors (as [docs/host-launch.md](../host-launch.md) did for extra
-arguments). Expected: **Claude** (`.claude/`, `.mcp.json`) and **Copilot** (its repository agent,
-hook and MCP configuration, list to be confirmed). **Codex** waits until its list is confirmed. An
+which it reads permissions, hooks, tools or MCP servers, confirmed from the agent's own
+documentation, `--help` or source and kept as test vectors (as [docs/host-launch.md](../host-launch.md) did for extra
+arguments). Confirmed: **Claude** (`.claude/`, `.mcp.json`) and **Codex** (#3644, below).
+**Copilot** (its repository agent, hook and MCP configuration, list to be confirmed) waits. An
 agent without a confirmed list is refused for agent launches.
 
-**#1447 W1 implementation (not yet wired).** `AgentLaunchWorktreeCheck` is a read-only
+**#1447 W1 implementation.** `AgentLaunchWorktreeCheck` is a read-only
 check of the created worktree: host marker, matching repository and approved subdirectory,
 detached HEAD, and clean state including ignored files. It refuses filesystem links rather
 than following them during configuration inspection. Claude's confirmed project locations
@@ -230,10 +230,64 @@ anywhere in the worktree refuses, regardless of contents. Main-checkout configur
 also refused because Claude can inherit its local settings. Sources:
 [settings files and worktree inheritance](https://code.claude.com/docs/en/settings),
 [MCP scopes](https://code.claude.com/docs/en/mcp), and Claude Code 2.1.322 `--help`
-(`--settings` and project/local settings controls). Copilot, Codex, Agency and unknown
+(`--settings` and project/local settings controls). Copilot, Agency and unknown
 kinds remain refused until their lists are confirmed. User-profile settings are unchanged.
-W2 must call the check before process start and handle refusal audit, removal of only
-the newly created worktree, and slot release; W1 does none of those and enables no launches.
+W2 (#2285, [host-launch.md](../host-launch.md)) calls the check before process start and
+handles refusal audit, removal of only the newly created worktree, and slot release.
+
+**Codex's list (#3644).** A Codex launch, an agent's or a fleet worker's, meets the same
+worktree rules as Claude's: isolated workspace, host marker, matching repository and
+subfolder, detached HEAD, clean including ignored files, and no links in the worktree. Any of
+these names refuses it, by presence, in any letter case (sources read Nov 25, 2026):
+
+| Name | What Codex reads there | Source |
+|---|---|---|
+| `.codex` | `config.toml` (approval policy, sandbox mode, MCP servers, inline hooks), `hooks.json`, `rules/*.rules` (a rule can run a command outside the sandbox without asking), `agents/` | Codex docs: [config](https://learn.chatgpt.com/docs/config-file/config-basic), [hooks](https://learn.chatgpt.com/docs/hooks), [rules](https://learn.chatgpt.com/docs/agent-configuration/rules), [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents); [config loader](https://github.com/openai/codex/blob/main/codex-rs/config/src/loader/mod.rs) |
+| `.agents` | plugin marketplaces `plugins/marketplace.json` and `plugins/api_marketplace.json`; skills (`skills/`) | [marketplace.rs](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/marketplace.rs); skills: [agent-principals.md](agent-principals.md) §5.3 (not re-confirmed in Codex's source) |
+| `.claude-plugin`, `.cursor-plugin` | plugin marketplaces (`marketplace.json`) and plugin manifests (`plugin.json`) | marketplace.rs; [plugin_namespace.rs](https://github.com/openai/codex/blob/main/codex-rs/utils/plugins/src/plugin_namespace.rs) |
+| `.codex-plugin` | a plugin manifest (`plugin.json`) | plugin_namespace.rs |
+| `.claude`, `.mcp.json` | another agent's setup, which a person can import (`/import`); `.mcp.json` under a plugin folder | Codex docs: [import](https://learn.chatgpt.com/docs/import); [plugin loader](https://github.com/openai/codex/blob/main/codex-rs/core-plugins/src/loader.rs) |
+
+Where the check looks:
+* every folder of the new worktree;
+* the main checkout: its top folder and each folder down to the launch folder, because a
+  linked worktree takes its hooks from the main checkout's `.codex`
+  (`root_checkout_hooks_folder_for_dir` in the config loader);
+* every folder above the worktree and above the main checkout, up to but not including the user
+  profile (to the drive root for a path outside it), for all but `.claude` and `.mcp.json`.
+  Codex's loader stops at the project root, so this is stricter than it needs. Codex reads
+  neither of those two there, and a person's repository folder often holds `.claude`. A
+  `CODEX_HOME` named `.codex` and placed above either one refuses too, as does a folder there
+  that cannot be listed.
+
+**Passing this check does not start Codex.** `LaunchService` then refuses every `agent:` or
+fleet Codex launch issued no worker credential: the script fleet route, a grant's (local, or
+`fleet.launch`) and an agent's own, with `ask` or Allow all. A new Codex session has no id to
+bind one to yet, so until one is issued (#4650) none starts, and Codex gets neither the `read`
+(§4) nor the `read+reply` (§11) credential. A person's own launch is unchanged.
+
+**Not guaranteed for Codex:**
+* the person's own settings: `~/.codex` (or `CODEX_HOME`), with its trusted projects, rules,
+  hooks, plugins and marketplaces, and `~/.agents`, as Claude's user settings are not;
+* system and managed settings (`%ProgramData%\OpenAI\Codex`, `/etc/codex`) and cloud-managed
+  requirements;
+* `AGENTS.md`, `AGENTS.override.md` and any fallback names the person's config lists. They are
+  instruction text with no approval or command authority of their own
+  ([AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)), so they are not
+  refused, as `CLAUDE.md` is not. A worker with approvals off can act on that text inside
+  Codex's sandbox;
+* a `plugin.json` outside the folders above: it is read as the manifest of a plugin that a
+  marketplace names. A repository's marketplaces are refused; the person's own are not;
+* a repository's `.env`, `.vscode` and devcontainer files: no read of them was confirmed or
+  ruled out, and they are not refused;
+* the list comes from Codex's documentation and its `main` source, not from a test of the
+  installed version; a newer Codex may read new places;
+* the check runs once, before the process starts;
+* `ask` does not make Codex ask every time: the host adds no approval flag, so the person's
+  Codex settings and sandbox decide (§8's "every action asks" is not assured);
+* once Codex is given a credential: a launch that never registers leaves a launch record with
+  no session id, and the launched-session check then refuses unrelated sessions (it fails
+  closed; a person's Codex launch does the same).
 
 **Prompt length: keep 16 KiB, refuse longer.** The protocol limit is 16 KiB of UTF-8 in a request
 of at most 20 KiB (`LaunchProtocol.MaxPrompt`/`MaxRequest`; v1-launch.md, "The prompt goes whole"),
