@@ -30,7 +30,9 @@ function Reset-Scenario {
         branch = 'main'; repo = 'o/r'; path = '.github/workflows/ci.yml'; open = $false
         log = '  Failed A.B.C.Method [1 s]'; unreadable = $false; jobName = 'product'; jobConclusion = 'failure'
         body = ''; comments = @(); writes = @(); calls = @(); foreign = $false; extraJobs = @(); title = ''; failComment = ''; created = $false
-        closeFails = 0; closeAttempts = 0; clock = 0 }
+        closeFails = 0; closeAttempts = 0; clock = 0
+        # #2558 classifier: open flaky issues (REST shape), compare commits, each commit's pull request files.
+        flaky = @(); flakyFails = $false; commits = @(); prFiles = @{}; compareFails = $false }
 }
 # $s.runs maps run number to its attempts' conclusions, oldest first; 'running' is an unfinished attempt.
 function Get-FakeTime([int]$Second) { [DateTime]::new(2026, 11, 20, 12, 0, 0, [DateTimeKind]::Utc).AddSeconds($Second).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") }
@@ -79,6 +81,22 @@ function Fake-Gh {
         '^api repos/o/r/actions/jobs/\d+/logs --allow-escape-sequences$' {
             if ($s.unreadable) { $global:LASTEXITCODE = 1; return }
             $s.log; return
+        }
+        '^api repos/o/r/issues\?labels=flaky&state=open&per_page=100$' {
+            if ($s.flakyFails) { $global:LASTEXITCODE = 1; return }
+            ConvertTo-Json -InputObject @($s.flaky) -Depth 5; return
+        }
+        '^api repos/o/r/compare/([0-9a-f]+)\.\.\.([0-9a-f]+)$' {
+            if ($s.compareFails) { $global:LASTEXITCODE = 1; return }
+            @{ commits = @($s.commits | ForEach-Object { @{ sha = $_.sha; commit = @{ message = $_.message } } }) } | ConvertTo-Json -Depth 5; return
+        }
+        '^api graphql -f query=' {
+            $repo = [ordered]@{}
+            foreach ($m in [regex]::Matches($a, '(c\d+): object\(oid: "([0-9a-f]+)"\)')) {
+                $pr = $s.prFiles[$m.Groups[2].Value]
+                $repo[$m.Groups[1].Value] = @{ associatedPullRequests = @{ nodes = @(if ($pr) { @{ number = $pr.number; files = @{ nodes = @($pr.files | ForEach-Object { @{ path = $_ } }) } } }) } }
+            }
+            @{ data = @{ repository = $repo } } | ConvertTo-Json -Depth 9; return
         }
         '^issue list ' {
             $found = @()
@@ -425,6 +443,80 @@ foreach ($case in @(@{ name = 'shares its second with entries on both sides of a
     Assert ($refused -match 'quarantine-completed' -and @(Get-GeneratorCalls).Count -eq 0 -and $s.writes.Count -eq $before) "a completion that $($case.name) refuses that entry before its write or any generator call ($refused)"
 }
 Remove-Item -LiteralPath $genDir -Recurse; $env:MAIN_RED_QUARANTINE = $null
+# ---- The red classifier (#2558) ----
+function Flaky([int]$Number, [string]$Title, [string]$Body = '', [string]$Login = 'danswett') { @{ number = $Number; title = $Title; body = $Body; user = @{ login = $Login } } }
+function Job([string]$Name, [string[]]$Tests = @(), [bool]$Readable = $true) { [pscustomobject]@{ Name = $Name; Tests = $Tests; LogReadable = $Readable; PostMerge = $false } }
+function Issue([int]$Number, [string]$Text, [string]$Login = 'danswett') { [pscustomobject]@{ number = $Number; title = $Text; body = ''; author = @{ login = $Login } } }
+
+Assert ((Get-TestFamily 'FakeHostTests.Method') -ceq 'FakeHostTests' -and (Get-TestFamily 'AgentBridge.Quality.Tests.EfficiencyActiveSessionTests.Viewer') -ceq 'EfficiencyActiveSessionTests' -and
+    (Get-TestFamily 'test/sign-in.spec.mjs:80') -ceq 'sign-in.spec.mjs' -and $null -eq (Get-TestFamily 'NoDots')) 'a test''s family is its class, or its spec file''s name'
+$issues = @((Issue 1 'Flaky: FakeHostTestsX.Other'), (Issue 2 'Flaky: FakeHostTests.Another_method' 'stranger'), (Issue 3 'Flaky: sign-in.spec.mjs:423 on chromium'))
+Assert ($null -eq (Find-FlakyFamily 'FakeHostTests' $issues) -and (Find-FlakyFamily 'sign-in.spec.mjs' $issues).number -eq 3) 'a family matches standing alone, from a trusted author only'
+
+$issues = @((Issue 10 'Flaky: A.B.C.Method'), (Issue 11 'Flaky: DTests.Other'))
+$rows = @(Get-RedClassification @((Job 'product' @('A.B.C.Method', 'B.DTests.Third', 'X.Y.Z')), (Job 'app' @()), (Job 'lab' @() $false), (Job 'quality-gate' @())) $issues $null)
+Assert (($rows | ForEach-Object { "$($_.Verdict):$($_.Evidence)" }) -join '|' -ceq
+    'FLAKE:#10 exact|FLAKE:#11 class-only (DTests)|NEW:no open flaky issue names it|INFRA:no test failed in its log (build, timeout or runner)|INFRA:log unreadable|AGGREGATE:sums the other jobs') 'exact first, then class-only (marked), else NEW; a job with no test, or no log, is INFRA; quality-gate is AGGREGATE'
+$rows = @(Get-RedClassification @((Job 'product' @('A.B.C.Method'))) $null $null)
+Assert ($rows[0].Verdict -ceq 'UNKNOWN') 'an unreadable flaky list never guesses FLAKE or NEW'
+$prev = [Collections.Generic.HashSet[string]]::new([string[]]@('A.B.C.Method', 'X.Y.Z'), [StringComparer]::Ordinal)
+$rows = @(Get-RedClassification @((Job 'product' @('A.B.C.Method', 'X.Y.Z'))) $issues $prev @{ 'X.Y.Z' = 3 })
+Assert ($rows[0].Verdict -ceq 'FLAKE-REPEATED' -and $rows[1].Verdict -ceq 'NEW-REPEATED' -and $rows[1].Evidence -match 'failed again on retry; also in 3 earlier entries') 'a test that failed in the previous attempt is REPEATED, and its recurrence in this incident is counted'
+
+$fence = '```'
+$entry = "main-red: run=5 attempt=1 sha=abcdef01`nCI on main: x`n`n$fence`nJob: product (windows-latest)`n  A.B.C.Method`nJob: quality-gate`n  no test name was found`n$fence"
+$withTable = $entry + "`n" + (Format-RedClassification @([pscustomobject]@{ Job = 'p|x'; Test = 'a@b'; Verdict = 'NEW'; Evidence = 'e' }) @('- abc'))
+$set = Get-EntryTests $withTable
+Assert ((@($set) -join ',') -ceq 'A.B.C.Method' -and -not @($withTable -split "`n" | Where-Object { $_ -match '^  ' -and $_ -notmatch '^  (A\.B\.C\.Method|no test name was found)$' }).Count) 'an entry''s tests read the same with its table: no table line starts with two spaces'
+Assert ($withTable -match '\| p/x \| a\[at\]b \| NEW \| e \|') 'table cells are sanitized: no mention, no pipe'
+
+# Suspects: two reads (compare, then each commit's pull request files), ranked by nearness to the failing family.
+Reset-Scenario
+$s.commits = @(@{ sha = 'a1a1a1a1a1'; message = "Docs only`nbody" }, @{ sha = 'b2b2b2b2b2'; message = 'Host shutdown rework' }, @{ sha = 'c3c3c3c3c3'; message = 'Tweak' })
+$s.prFiles = @{ 'a1a1a1a1a1' = @{ number = 41; files = @('docs/readme.md') }; 'b2b2b2b2b2' = @{ number = 42; files = @('src/Host/FakeHost.cs') }; 'c3c3c3c3c3' = @{ number = 43; files = @('tests/X/FakeHostTests.cs') } }
+$lines = @(Get-SuspectCommits 'o/r' 'abcdef0123' 'fedcba9876' @('FakeHostTests.A_host_that_stops'))
+Assert ($lines[1] -match '^- c3c3c3c3 #43 Tweak \(touches FakeHostTests\)$' -and $lines[2] -match '^- b2b2b2b2 #42 Host shutdown rework \(touches FakeHost\)$' -and $lines[3] -match '^- a1a1a1a1 #41 Docs only$' -and
+    @($s.calls | Where-Object { $_[0] -eq 'api' }).Count -eq 2) 'suspects: the commit touching the test ranks first, then its product; two reads'
+Reset-Scenario; $s.compareFails = $true
+$lines = @(Get-SuspectCommits 'o/r' 'abcdef0123' 'fedcba9876' @('A.B.C'))
+Assert ($lines[0] -match 'unavailable' -and (@(Get-SuspectCommits 'o/r' '' 'fedcba9876' @('A.B.C')))[0] -match 'no green main') 'suspects never throw: a failed read or no green baseline says so'
+
+# End to end: a red entry carries its table; NEW alone reads compare and pull request files.
+Reset-Scenario
+$s.flaky = @((Flaky 70 'Flaky: A.B.C.Method'))
+Detect
+Assert ($s.body -match '(?m)^\| product \| A\.B\.C\.Method \| FLAKE \| #70 exact \|$' -and -not @($s.calls | Where-Object { $_[0] -eq 'api' -and $_[1] -match 'compare|graphql' }).Count) 'a red entry labels a known flake, and reads no suspects for it'
+Reset-Scenario
+$s.runs = @{ 100 = @('success'); 101 = @('failure') }; $s.run = 101; $s.newest = 101
+$s.commits = @(@{ sha = 'd4d4d4d4d4'; message = 'Change C' }); $s.prFiles = @{ 'd4d4d4d4d4' = @{ number = 44; files = @('src/C.cs') } }
+Detect
+Assert ($s.body -match 'NEW \| no open flaky issue names it' -and $s.body -match '(?m)^suspects since green abcdef01 \(1 commit\(s\)\):$' -and $s.body -match '(?m)^- d4d4d4d4 #44 Change C \(touches C\)$') 'a NEW failure lists the commits since the last green main'
+Reset-Scenario
+$s.runs = @{ 100 = @('failure', 'success') }; $s.attempt = 1
+Detect
+$s.attempt = 2
+Detect
+Assert ($s.comments[-1].body -match '(?m)^classification \(#2558\): flake confirmed, passed on retry: A\.B\.C\.Method$' -and -not $s.open) 'a retry that goes green records which tests passed on retry'
+
+# Tonight's 8 red entries (#4001, Nov 23) with the 60 open flaky issues then.
+$fx = Get-Content -Raw (Join-Path $PSScriptRoot 'fixtures' 'main-red-2026-11-23.json') | ConvertFrom-Json
+$tally = @{}; $earlier = @{}; $fakeHost = $null
+foreach ($e in @($fx.entries)) {
+    $jobs = @(); $cur = $null
+    foreach ($l in $e -split '\r?\n') {
+        if ($l -cmatch '^Job( \(post-merge-tier\))?: (.*)$') { $cur = Job $Matches[2]; $cur.Tests = [Collections.Generic.List[string]]::new(); $jobs += $cur }
+        elseif ($cur -and $l -cmatch '^  (\S.*)$' -and $Matches[1] -cne 'no test name was found') { $cur.Tests.Add($Matches[1]) }
+    }
+    foreach ($r in @(Get-RedClassification $jobs @($fx.flaky) $null $earlier)) {
+        $k = $r.Verdict + $(if ($r.Evidence -match 'class-only') { ' class-only' } elseif ($r.Verdict -eq 'FLAKE') { ' exact' }); $tally[$k] = 1 + $(if ($tally.ContainsKey($k)) { $tally[$k] } else { 0 })
+        if ($r.Test -like 'FakeHostTests.*') { $fakeHost = $r }
+    }
+    foreach ($x in (Get-EntryTests $e)) { $earlier[$x] = 1 + $(if ($earlier.ContainsKey($x)) { $earlier[$x] } else { 0 }) }
+}
+$got = ($tally.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '
+Assert ($got -ceq 'AGGREGATE=7 FLAKE class-only=5 FLAKE exact=3 INFRA=6 NEW=7') "tonight's 8 reds: $got"
+Assert ($fakeHost.Verdict -ceq 'NEW' -and $fakeHost.Evidence -match 'also in 4 earlier entries') 'tonight''s FakeHost failure, in 5 of 8 entries with no flaky issue, reads as a recurring NEW'
+
 Remove-Item -LiteralPath $tierPath
 if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 "main-red: $script:checks checks passed"

@@ -97,6 +97,136 @@ function Format-MainRedBody($Run, [string]$Repository, $Jobs, [bool]$PostMergeOn
     $text + "`n" + '```'
 }
 
+# --- The red classifier (#2558): each failure in an entry, labelled, so triage is a table, not a log read. ---
+# FLAKE: an open, trusted flaky issue names the test (exact), or only its class or spec file (class-only, marked).
+# NEW: none does. INFRA: the job failed with no test in its log, or its log was unreadable. AGGREGATE: quality-gate,
+# which only sums the other jobs. -REPEATED: the same test failed in the previous attempt of the same run.
+
+# The open flaky issues, one bounded read, shaped as Find-FlakyIssue expects (author.login). $null if unreadable.
+function Get-FlakyIssues([string]$Repository) {
+    try {
+        $items = @(Invoke-Gh api "repos/$Repository/issues?labels=flaky&state=open&per_page=100" | ConvertFrom-Json)
+        # The comma keeps an empty list a list: no open flaky issue is not the same as an unreadable list.
+        , @(foreach ($i in $items) {
+                if ($i.PSObject.Properties['pull_request'] -and $i.pull_request) { continue }
+                [pscustomobject]@{ number = $i.number; title = [string]$i.title; body = [string]$i.body; author = @{ login = [string]$i.user.login } }
+            })
+    } catch { $global:LASTEXITCODE = 0; $null }
+}
+
+# A test's family: its class (Class.Method, any namespace) or its spec file's name (test/x.spec.mjs:80 -> x.spec.mjs).
+function Get-TestFamily([string]$Test) {
+    if ($Test -cmatch '^(?:[\w.-]+/)*([\w-]+\.spec\.mjs):\d+$') { return $Matches[1] }
+    $parts = @($Test -split '\.')
+    if ($parts.Count -ge 2 -and $parts[-2] -cmatch '^[A-Za-z_]\w*$') { return $parts[-2] }
+    $null
+}
+
+# The open, trusted flaky issue that names the family standing alone (a namespace before it, or .Method or :line
+# after it, is fine; FakeHostTestsX or XFakeHostTests is not), or $null.
+function Find-FlakyFamily([string]$Family, $Issues) {
+    if (-not $Family) { return $null }
+    $pattern = '(?<![\w-])' + [regex]::Escape($Family) + '(?![\w-])'
+    foreach ($issue in $Issues) {
+        if ($issue.author.login -notin $script:TrustedAuthors) { continue }
+        if ("$($issue.title)`n$($issue.body)" -cmatch $pattern) { return $issue }
+    }
+    $null
+}
+
+# The tests an earlier entry lists under its jobs (no sentinel lines).
+function Get-EntryTests([string]$Entry) {
+    $tests = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $inJob = $false
+    foreach ($line in $Entry -split '\r?\n') {
+        if ($line -ceq '```') { if ($inJob) { break }; continue }
+        if ($line -cmatch '^Job( \(post-merge-tier\))?: ') { $inJob = $true; continue }
+        if ($inJob -and $line -cmatch '^  (\S.*)$' -and $Matches[1] -cnotin @('no test name was found', 'log was unreadable')) { [void]$tests.Add($Matches[1]) }
+    }
+    , $tests
+}
+
+# The issue body and its comments' bodies, each only if present (StrictMode).
+function Get-EntryBodies($Issue, $Comments) {
+    foreach ($o in @($Issue) + @($Comments)) { if ($o -and $o.PSObject.Properties['body'] -and $o.body) { [string]$o.body } }
+}
+
+# Pure: one row per failed test (or per job, when it has none). $Issues $null means the flaky list was unreadable.
+function Get-RedClassification($Jobs, $Issues, [Collections.Generic.HashSet[string]]$Previous, [hashtable]$Earlier = @{}) {
+    foreach ($job in @($Jobs)) {
+        if ($job.Name -ceq $script:GateJob) { [pscustomobject]@{ Job = $job.Name; Test = ''; Verdict = 'AGGREGATE'; Evidence = 'sums the other jobs' }; continue }
+        if (-not $job.LogReadable) { [pscustomobject]@{ Job = $job.Name; Test = ''; Verdict = 'INFRA'; Evidence = 'log unreadable' }; continue }
+        if (@($job.Tests).Count -eq 0) { [pscustomobject]@{ Job = $job.Name; Test = ''; Verdict = 'INFRA'; Evidence = 'no test failed in its log (build, timeout or runner)' }; continue }
+        foreach ($test in @($job.Tests)) {
+            $verdict = 'NEW'; $evidence = 'no open flaky issue names it'
+            if ($null -eq $Issues) { $verdict = 'UNKNOWN'; $evidence = 'flaky issues unreadable' }
+            elseif ($exact = Find-FlakyIssue $test $Issues) { $verdict = 'FLAKE'; $evidence = "#$($exact.number) exact" }
+            elseif ($family = Find-FlakyFamily (Get-TestFamily $test) $Issues) { $verdict = 'FLAKE'; $evidence = "#$($family.number) class-only ($(Get-TestFamily $test))" }
+            if ($Previous -and $Previous.Contains($test)) { $verdict += '-REPEATED'; $evidence += '; failed again on retry' }
+            if ($Earlier.ContainsKey($test)) { $evidence += "; also in $($Earlier[$test]) earlier entr$(if ($Earlier[$test] -eq 1) { 'y' } else { 'ies' }) of this incident" }
+            [pscustomobject]@{ Job = $job.Name; Test = $test; Verdict = $verdict; Evidence = $evidence }
+        }
+    }
+}
+
+# For NEW failures: the commits since the last green main, top 3 by how near their pull request's files are to a
+# failing test's family (its name, then its product name without Tests). Two reads: compare, then one GraphQL read of
+# each commit's pull request files. Never throws: a suspect list is help, not evidence.
+function Get-SuspectCommits([string]$Repository, [string]$Base, [string]$Head, [string[]]$Tests) {
+    if (-not $Base) { return @('suspects: no green main in the last 100 runs to compare with') }
+    if ($Base -cnotmatch '^[0-9a-f]{7,40}$' -or $Head -cnotmatch '^[0-9a-f]{7,40}$') { return @('suspects: unavailable (commit ids unreadable)') }
+    try {
+        $cmp = Invoke-Gh api "repos/$Repository/compare/$Base...$Head" | ConvertFrom-Json
+        $commits = @(@($cmp.commits) | Select-Object -Last 20)
+        if (-not $commits.Count) { return @("suspects: none (no commits since green $($Base.Substring(0, 8)))") }
+        $owner, $name = $Repository -split '/', 2
+        $i = 0; $alias = @{}
+        $fields = ($commits | ForEach-Object { $alias[$_.sha] = "c$i"; $i++; "$($alias[$_.sha]): object(oid: `"$($_.sha)`") { ... on Commit { associatedPullRequests(first: 1) { nodes { number files(first: 100) { nodes { path } } } } } }" }) -join ' '
+        $repo = $null
+        try { $repo = ((Invoke-Gh api graphql -f "query=query { repository(owner: `"$owner`", name: `"$name`") { $fields } }") -join "`n" | ConvertFrom-Json).data.repository } catch { $global:LASTEXITCODE = 0 }
+        $families = @($Tests | ForEach-Object { Get-TestFamily $_ } | Where-Object { $_ } | Sort-Object -Unique)
+        $ranked = for ($k = 0; $k -lt $commits.Count; $k++) {
+            $c = $commits[$k]; $pr = $null; $paths = @()
+            if ($repo -and $repo.PSObject.Properties[$alias[$c.sha]] -and $repo.($alias[$c.sha])) {
+                $pr = @($repo.($alias[$c.sha]).associatedPullRequests.nodes)[0]
+                if ($pr) { $paths = @($pr.files.nodes | ForEach-Object { [string]$_.path }) }
+            }
+            $score = 0; $why = ''
+            foreach ($f in $families) {
+                $stem = $f -replace '\.spec\.mjs$', '' -replace 'Tests$', ''
+                if (@($paths | Where-Object { $_ -match [regex]::Escape($f) }).Count) { if ($score -lt 3) { $score = 3; $why = "touches $f" } }
+                elseif ($stem.Length -ge 4 -and @($paths | Where-Object { $_ -match [regex]::Escape($stem) }).Count) { if ($score -lt 2) { $score = 2; $why = "touches $stem" } }
+            }
+            [pscustomobject]@{ Commit = $c; Pr = $pr; Score = $score; Why = $why; Order = $k }
+        }
+        $top = @($ranked | Sort-Object @{ e = 'Score'; Descending = $true }, @{ e = 'Order'; Descending = $true } | Select-Object -First 3)
+        @("suspects since green $($Base.Substring(0, 8)) ($($commits.Count) commit(s)):") + @($top | ForEach-Object {
+                $headline = (([string]$_.Commit.commit.message) -split '\r?\n')[0]
+                $pr = if ($_.Pr) { " #$($_.Pr.number)" } else { '' }
+                "- $($_.Commit.sha.Substring(0, 8))$pr $(Get-SafeText $headline 100)$(if ($_.Why) { " ($($_.Why))" })"
+            })
+    } catch { $global:LASTEXITCODE = 0; @('suspects: unavailable (the compare read failed)') }
+}
+
+function Get-SafeText([string]$Text, [int]$Max = 300) {
+    $clean = $Text.Replace('@', '[at]').Replace('`', "'").Replace('|', '/') -replace '\p{C}', ''
+    if ($clean.Length -gt $Max) { return $clean.Substring(0, $Max) + ' [truncated]' }
+    $clean
+}
+
+# The table under an entry. No line starts with two spaces, so an entry's test list (B3b) never reads a row as a test.
+function Format-RedClassification($Rows, [string[]]$Suspects) {
+    $rows = @($Rows)
+    $count = ($rows | Group-Object Verdict | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ', '
+    $lines = @('', "classification (#2558): $count", '', '| job | test | verdict | evidence |', '|---|---|---|---|')
+    $lines += @($rows | Select-Object -First 40 | ForEach-Object {
+            "| $(Get-SafeText $_.Job 80) | $(if ($_.Test) { Get-SafeText $_.Test 160 } else { '-' }) | $($_.Verdict) | $(Get-SafeText $_.Evidence 120) |"
+        })
+    if ($rows.Count -gt 40) { $lines += "($($rows.Count - 40) more rows not shown)" }
+    if (@($Suspects).Count) { $lines += '' ; $lines += @($Suspects) }
+    $lines -join "`n"
+}
+
 # B3b (#3210): the one test an entry names when every failed job but quality-gate is post-merge tier and
 # names only that test; otherwise $null. Entries are parsed, not jobs, so the previous run reads the same way.
 function Get-QuarantineTest([string]$Entry) {
@@ -268,10 +398,18 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
             elseif ($id -gt $RunId -or ($id -eq $RunId -and $n -ge $run.run_attempt)) { return }
         }
     }
+    # #2558: the previous attempt of this same run, if its red entry is recorded: a retry's verdict reads against it.
+    $previousEntry = if ($issue -and $run.run_attempt -gt 1) {
+        @(Get-EntryBodies $issue $comments | Where-Object { $_ -cmatch "^main-red: run=$RunId attempt=$($run.run_attempt - 1) sha=" }) | Select-Object -Last 1
+    }
+    $previousTests = if ($previousEntry) { Get-EntryTests $previousEntry } else { $null }
     if ($verdict -eq 'green') {
         if ($issue) {
             if (-not $greenRecorded) {
-                Invoke-Gh issue comment $issue.number --repo $Repository --body "main-red: green again, run=$RunId attempt=$($run.run_attempt), sha=$sha" | Out-Null
+                $retry = if ($previousTests -and $previousTests.Count) {
+                    "`nclassification (#2558): flake confirmed, passed on retry: $((@($previousTests) | ForEach-Object { Get-SafeText $_ 160 }) -join ', ')"
+                } else { '' }
+                Invoke-Gh issue comment $issue.number --repo $Repository --body "main-red: green again, run=$RunId attempt=$($run.run_attempt), sha=$sha$retry" | Out-Null
             }
             Invoke-Gh issue close $issue.number --repo $Repository | Out-Null
         }
@@ -309,6 +447,18 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
         $generate = $eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
             [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and -not (Test-QuarantineCompleted $issue $comments $test $Recovery)
     }
+    # #2558: label each failure. One read of the open flaky issues; two more (compare, pull request files) only for NEW.
+    # How often each test already failed in this open incident's earlier entries: a recurring NEW is a missing flaky issue.
+    $earlier = @{}
+    foreach ($e in @(Get-EntryBodies $issue $comments | Where-Object { $_ -clike 'main-red: run=*' })) {
+        foreach ($x in (Get-EntryTests $e)) { $earlier[$x] = 1 + $(if ($earlier.ContainsKey($x)) { $earlier[$x] } else { 0 }) }
+    }
+    $rows = @(Get-RedClassification $jobs (Get-FlakyIssues $Repository) $previousTests $earlier)
+    $newTests = [string[]]@($rows | Where-Object { $_.Verdict -like 'NEW*' } | ForEach-Object { $_.Test })
+    $suspects = if ($newTests.Count) { @(Get-SuspectCommits $Repository $(if ($Recovery) { [string]$Recovery.head_sha }) ([string]$run.head_sha) $newTests) } else { @() }
+    $table = Format-RedClassification $rows $suspects
+    $body += "`n" + $table
+    if ($env:GITHUB_STEP_SUMMARY) { "### Main red: run $RunId attempt $($run.run_attempt)`n$table" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 }
     $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
     if ($issue) {
         # A blocking failure must not stay filed under a title that says it never blocks.
