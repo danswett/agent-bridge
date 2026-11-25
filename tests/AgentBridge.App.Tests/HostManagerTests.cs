@@ -331,7 +331,25 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task Quitting_during_an_update_brings_the_host_back_once_its_task_run_has_ended()
+    public Task Quitting_during_an_update_brings_the_host_back_once_its_task_run_has_ended() => QuitDuringAnUpdateAsync();
+
+    // The update's wait for the package's other hosts runs on the held clock too, so a real host process the test did not make would never
+    // let it go: on a shared build machine one running from the app folder made the stop wait for ever ("timed out waiting for the update's stop").
+    // A test names its package, and a process of the machine's is not in it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_real_host_process_running_from_the_app_folder_is_not_part_of_the_update_under_test()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var exe = Path.Combine(app, "agent-bridge-host.exe");
+        File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), exe, overwrite: true);
+        using var stray = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "/k")
+            { RedirectStandardInput = true, UseShellExecute = false, CreateNoWindow = true })!;
+        try { await QuitDuringAnUpdateAsync(); }
+        finally { stray.Kill(true); stray.WaitForExit(); }
+    }
+
+    async Task QuitDuringAnUpdateAsync()
     {
         // The update's stop is held on a clock that never moves, so it waits for this test to let
         // the host go however slow the runner is. On the wall clock its 1 s ran out first on Arm64,
@@ -343,6 +361,8 @@ public sealed class HostManagerTests : IAsyncLifetime
             StopTimeout = TimeSpan.FromSeconds(1),
             Poll = TimeSpan.FromMilliseconds(50),
             Time = new FakeTimeProvider(Make.T0),
+            // No machine's real processes: the package is what a test says it is (as `manager` has it).
+            PackageHosts = () => [],
         };
         held.SetStartAtSignIn(true);
         var stopping = new TaskCompletionSource();
