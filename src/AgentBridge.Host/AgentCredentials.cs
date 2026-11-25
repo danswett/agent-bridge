@@ -291,12 +291,19 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     // Called only by the person-authorized management path, never a remote/agent operation.
     // No token is returned. Both hashes stand until a successful fleet read retires the old one.
-    public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null, string? task = null, IReadOnlyList<string>? files = null)
+    public (AgentCredential Credential, string Path) MintScript(string name, TimeSpan? lifetime = null, string? task = null, IReadOnlyList<string>? files = null,
+        IReadOnlyList<string>? shown = null)
     {
         var now = time.GetUtcNow();
         var credential = AgentCredential.Script(BlobFormat.Base64Url(RandomNumberGenerator.GetBytes(16)), machine, name, now, lifetime);
-        if (task is not null) { credential = credential with { ScheduledTask = ScriptTaskBinding.Pin(task, files ?? [],
-            tasks ?? throw new InvalidOperationException("refused: this host cannot check scheduled tasks")) }; }
+        if (task is not null)
+        {
+            var binding = ScriptTaskBinding.Pin(task, files ?? [], tasks ?? throw new InvalidOperationException("refused: this host cannot check scheduled tasks"));
+            // The app's press shows the person the files the token can reach; what the host reads and pins now must be exactly those (null: a caller that showed nothing, as the CLI).
+            if (shown is not null && !binding.Files.Select(f => f.Path).SequenceEqual(shown, StringComparer.OrdinalIgnoreCase))
+            { throw new InvalidOperationException("refused: the files this task pins differ from what was shown; nothing was minted"); }
+            credential = credential with { ScheduledTask = binding };
+        }
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }

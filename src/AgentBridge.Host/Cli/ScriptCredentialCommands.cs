@@ -34,6 +34,14 @@ public static class ScriptCredentialCommands
         { throw new ArgumentException("scripts add or revoke needs a valid script name"); }
         if (op is not ("scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet"))
         { throw new ArgumentException("unknown script credential operation"); }
+        // Only the app's mint press binds a task, with the extra files and the exact list the person was shown (design/script-credentials-run.md section 4).
+        string? task = null;
+        IReadOnlyList<string>? files = null, shown = null;
+        if (op == "scripts.add" && (data.TryGetProperty("task", out _) || data.TryGetProperty("files", out _) || data.TryGetProperty("shown", out _)))
+        {
+            if (kind != CallerKind.App || !TryText(data, "task", out task) || !TryList(data, "files", out files) || !TryList(data, "shown", out shown) || shown.Count == 0)
+            { throw new ArgumentException("a task press needs the task, its extra files and the list of files shown to the person"); }
+        }
         // The audit attempt and the change run as one step after the press has used up its confirmation. Using it up is the atomic
         // step (a double press finds it gone and is refused); no credential store lock is held while the audit log is written.
         object Change()
@@ -49,7 +57,7 @@ public static class ScriptCredentialCommands
             }
             if (op == "scripts.add")
             {
-                var (credential, path) = credentials.MintScript(name);
+                var (credential, path) = credentials.MintScript(name, task: task, files: files, shown: shown);
                 return new { credential.Id, credential.Principal, credential.Scope, credential.ExpiresAt, Path = path };
             }
             if (!credentials.RevokeScript(name)) { throw new InvalidOperationException("no script credential exists for that name"); }
@@ -58,6 +66,19 @@ public static class ScriptCredentialCommands
         if (kind != CallerKind.App) { return Change(); }
         var sent = data.TryGetProperty("confirm", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
         return credentials.RunScriptPress(sent, op, name, channel, Change);
+    }
+
+    static bool TryText(JsonElement data, string field, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? text)
+    {
+        text = data.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        return text is not null;
+    }
+
+    static bool TryList(JsonElement data, string field, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IReadOnlyList<string>? list)
+    {
+        list = data.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.Array && v.GetArrayLength() <= 32 && v.EnumerateArray().All(e => e.ValueKind == JsonValueKind.String)
+            ? [.. v.EnumerateArray().Select(e => e.GetString()!)] : null;
+        return list is not null;
     }
 
     static bool TryName(JsonElement data, out string name)

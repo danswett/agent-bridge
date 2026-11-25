@@ -262,6 +262,9 @@ security boundary. An agent or credentialed connection, including a revoked one,
 one outstanding per script, voided by any change to the script's credentials (see
 [script-credentials.md](../design/script-credentials.md) section 5). `scripts.list` returns each script's name, scope, latest expiry,
 live count, `launch:fleet` tick and, when it has authenticated since the host started, `lastUse`; never a token, hash, path or id.
+`scripts.add` from the app may also carry `"task"` (such as `\Slipgates\dispatcher`), `"files"` (the extra files to pin) and `"shown"` (every file the person was shown, in pin order: the launcher,
+the program, its script, then the extras): the host pins through the task reader and refuses unless the files it reads now are exactly `"shown"` (a task press with no
+`"shown"` is refused). The host command line cannot bind a task. See [script-credentials-run.md](../design/script-credentials-run.md) sections 4 and 8.
 See [host-config.md](../host-config.md#script-credentials-at-the-machine) for names, limits and exit codes. Add returns
 `{ "id", "principal", "scope", "expiresAt", "path" }`, never a token. Revoke returns `{ "name", "revoked": true }` after removing both
 rotations from the running and persisted store; an unknown name is an error. An `attempted` audit entry precedes each accepted press;
