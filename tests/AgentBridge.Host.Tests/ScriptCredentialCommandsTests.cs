@@ -244,6 +244,7 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         foreach (var arg in new[] { typeof(AgentCredentials).Assembly.Location, "scripts", verb, "pump-wake", "--profile", ".." })
         { start.ArgumentList.Add(arg); }
         start.Environment["AGENT_BRIDGE_SESSION"] = "fixture-agent-session";
+        HostProcessIsolation.Isolate(start, HostProcessIsolation.NewRoot("scripts-agent-"));
         using var process = System.Diagnostics.Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

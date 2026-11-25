@@ -23,6 +23,13 @@ public static class Program
             var result = typeof(HostSettings).Assembly.EntryPoint!.Invoke(null, [new[] { "devices", "descriptor", "--profile", "private-sentinel:invalid" }]);
             return result is Task<int> pending ? pending.GetAwaiter().GetResult() : (int)result!;
         }
+        // #4520: prints the profile root the product would use, and touches nothing: the read-only
+        // check that a test's isolation holds before anything is written (ProfileRootIsolationTests).
+        if (args is ["profile-root-child"])
+        {
+            Console.Out.WriteLine(AgentBridge.Transport.ProfileFolders.DefaultRoot);
+            return 0;
+        }
         if (args is ["hook-readiness-contention"] && OperatingSystem.IsWindows())
         {
             return HookReadinessWithBusyThreadPool();

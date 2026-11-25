@@ -7,6 +7,12 @@ on Windows, `~/.agent-bridge/<profile>/config.json` elsewhere (`default` unless
 takes a restart unless noted below. `fleetNames.launchRule` is read fresh for each launch.
 Nothing another device sends can change it.
 
+For tests and diagnostics only, `AGENT_BRIDGE_PROFILE_ROOT` (an absolute folder) replaces
+the folder the profiles live in, for the host, the app and the launcher alike. It is the only
+way to move it: `LOCALAPPDATA` is not one, because Windows' own folder lookup ignores it.
+A relative value is refused, never read as the default: the host and the launcher say one fixed line and exit 2, with nothing read or written. Any test that runs the real host as
+a process sets it (#4520).
+
 Until the app has a settings screen, it is edited with the host's own commands, at the
 machine (below), or by hand. The app will edit the same file; this page is the schema both
 follow.
