@@ -128,7 +128,7 @@ public class FullWorkflowTests
 
         Assert.Equal("${{ steps.commit.outputs.tested }}", Scalar(trigger["outputs"], "tested"));
         Assert.Equal("read", Scalar(trigger["permissions"], "actions"));
-        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "tested=$sha\" >> \"$GITHUB_OUTPUT\"" })
+        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "echo \"tested=$sha\"; } >> \"$GITHUB_OUTPUT\"" })
             Assert.Contains(part, script, StringComparison.Ordinal);
         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
     }
