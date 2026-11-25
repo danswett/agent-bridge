@@ -35,7 +35,7 @@ public sealed class MainTests : IAsyncLifetime
         connection.Sessions.Synced += () => Interlocked.Increment(ref syncs);
         var deliveries = new Deliveries(connection, ui);
         var planner = new ToastPlanner(new Sink(shown), clock) { Capabilities = () => connection.Capabilities };
-        main = new MainViewModel(connection, new CardContext { Deliveries = deliveries, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection }, new UsageViewModel(), toasts: planner);
+        main = new MainViewModel(connection, new CardContext { Deliveries = deliveries, Folds = new FoldStore(null), Capabilities = () => connection.Capabilities, Host = connection, Time = clock }, new UsageViewModel(), toasts: planner) { Time = clock };
         connection.Start();
         return Task.CompletedTask;
     }
@@ -85,6 +85,96 @@ public sealed class MainTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => main.Sessions.Single(c => c.Id == "old").Session.Status == SessionStatus.Working, "the update");
         Assert.Equal(["old", "asking"], Order());
+    }
+
+    // The app ticks every second on the UI thread (MainViewModel.Tick); a test moves the clock and ticks.
+    void Pass(TimeSpan by)
+    {
+        clock.Advance(by);
+        ui.Post(main.Tick);
+    }
+
+    [Fact]
+    public async Task Most_recent_applies_pending_activity_in_one_batch_five_seconds_after_the_last_without_another_host_event()
+    {
+        await SnapshotAsync();
+        ui.Post(() => main.SortIndex = (int)SessionSort.Recent);
+        await Update("old", 2);
+        Assert.Equal(["old", "asking"], Order());
+        Pass(TimeSpan.FromSeconds(1));
+        await Update("asking", 3);
+        Assert.Equal(["old", "asking"], Order());
+        Pass(TimeSpan.FromMilliseconds(3999));
+        Assert.Equal(["old", "asking"], Order());
+        Pass(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(["asking", "old"], Order());
+    }
+
+    [Fact]
+    public async Task Ending_the_last_typing_hold_applies_pending_activity_without_another_host_event()
+    {
+        await SnapshotAsync();
+        ui.Post(() =>
+        {
+            main.SortIndex = (int)SessionSort.Recent;
+            Card("asking").Editing = true;
+            Card("old").Editing = true;
+        });
+        await Update("old", 2);
+        Pass(TimeSpan.FromSeconds(6));
+        ui.Post(() => Card("old").Editing = false);
+        Assert.Equal(["asking", "old"], Order());
+        ui.Post(() => Card("asking").Editing = false);
+        Assert.Equal(["old", "asking"], Order());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_new_session_or_question_alone_bypasses_the_hold_and_keeps_focus_and_typing_on_its_row(bool question)
+    {
+        await SnapshotAsync();
+        await host.SendAsync(Events.SessionUpsert, Make.Session("third", updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => main.Sessions.Count == 3, "the third row");
+        var focused = Card("third");
+        ui.Post(() =>
+        {
+            main.SortIndex = (int)SessionSort.Recent;
+            main.Selected = focused;
+            focused.Editing = true;
+        });
+        await Update("old", 10);
+        Assert.Equal(["third", "asking", "old"], Order());
+        var attention = question ? "asking" : "new";
+        await host.SendAsync(Events.SessionUpsert, Make.Session(attention, question: question ? Make.Choice() with { Id = "new-question" } : null, updated: Make.T0));
+        await Wait.UntilAsync(() => question ? Card(attention).Session.Question?.Id == "new-question" : main.Sessions.Count == 4, "attention");
+        Assert.Equal(question ? ["asking", "third", "old"] : ["new", "third", "asking", "old"], Order());
+        Assert.Same(focused, TestUi.Read(() => main.Selected));
+        Assert.True(TestUi.Read(() => focused.Editing));
+    }
+
+    [Fact]
+    public async Task A_question_that_bypasses_the_hold_cannot_be_answered_for_half_a_second()
+    {
+        await SnapshotAsync();
+        ui.Post(() =>
+        {
+            main.SortIndex = (int)SessionSort.Recent;
+            Card("old").Editing = true;
+        });
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Choice() with { Id = "new-question" }, updated: Make.T0.AddMinutes(1)));
+        await Wait.UntilAsync(() => Card("asking").Session.Question?.Id == "new-question", "the new question");
+        Assert.False(TestUi.Read(() => Card("asking").Question!.CanAnswer));
+        Pass(TimeSpan.FromMilliseconds(499));
+        Assert.False(TestUi.Read(() => Card("asking").Question!.CanAnswer));
+        Pass(TimeSpan.FromMilliseconds(1));
+        Assert.True(TestUi.Read(() => Card("asking").Question!.CanAnswer));
+    }
+
+    async Task Update(string id, int minute)
+    {
+        await host.SendAsync(Events.SessionUpsert, Make.Session(id, status: SessionStatus.Working, response: $"update {minute}", updated: Make.T0.AddMinutes(minute)));
+        await Wait.UntilAsync(() => Card(id).Response == $"update {minute}", "meaningful activity");
     }
 
     [Fact]
