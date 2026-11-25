@@ -71,9 +71,7 @@ jobs:
           fi
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "the commit under test is not 40 lowercase hex characters"
           [[ "$ci_id" =~ ^[0-9]+$ && "$number" =~ ^[0-9]+$ ]] || fail "the CI run's id or number isn't a number"
-          echo "ci-run-id=$ci_id" >> "$GITHUB_OUTPUT"
-          echo "ci-run-number=$number" >> "$GITHUB_OUTPUT"
-          echo "tested=$sha" >> "$GITHUB_OUTPUT"
+          { echo "ci-run-id=$ci_id"; echo "ci-run-number=$number"; echo "tested=$sha"; } >> "$GITHUB_OUTPUT"
           echo "FULL lane for commit $sha" >> "$GITHUB_STEP_SUMMARY"
 
   spikes:
