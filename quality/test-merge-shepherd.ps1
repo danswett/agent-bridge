@@ -5,42 +5,57 @@ $script:passed = 0; $script:failed = 0
 $script:deployedRule = Get-Content -Raw (Join-Path $PSScriptRoot 'merge-rule.yml')
 function Get-Content { $global:MergeShepherdFake.localRule }
 function gh {
-    if ($args.Count -ne 4 -or $args[0] -cne 'api' -or $args[1] -cne 'graphql' -or
+    $fake = $global:MergeShepherdFake
+    if ($args.Count -notin @(4, 8) -or $args[0] -cne 'api' -or $args[1] -cne 'graphql' -or
         $args[2] -cne '-f' -or $args[3] -notmatch '^query=query\b' -or $args[3] -match '\bmutation\b') {
-        throw 'Only the single read-only GraphQL query is allowed.'
+        throw 'Only read-only GraphQL pages are allowed.'
     }
-    $global:MergeShepherdFake.calls++
-    $global:LASTEXITCODE = $global:MergeShepherdFake.exitCode
-    $global:MergeShepherdFake.response | ConvertTo-Json -Depth 30 -Compress
+    if ($fake.calls -gt 0 -and ($args[4] -cne '-F' -or $args[5] -cne 'first=false' -or
+        $args[6] -cne '-f' -or $args[7] -cne "cursor=$($fake.pages[$fake.calls - 1].data.repository.pullRequests.pageInfo.endCursor)")) {
+        throw 'Subsequent pages must use the previous cursor and omit repeated rules.'
+    }
+    if ($fake.calls -ge $fake.pages.Count) { throw 'Unexpected extra read.' }
+    $page = $fake.pages[$fake.calls++]
+    $global:LASTEXITCODE = $fake.exitCode
+    $page | ConvertTo-Json -Depth 30 -Compress
 }
 function Status($context, $creator, $description = 'gpt-6.1-sol CLEAN', $state = 'SUCCESS') {
     @{ context = $context; creator = @{ login = $creator }; description = $description; state = $state
         createdAt = '2026-11-18T19:00:00Z'; targetUrl = 'https://github.com/danswett/agent-bridge/pull/1#issuecomment-1' }
 }
-function Case($name, [scriptblock]$change, $eligible = $false, $action = 'HOLD', [switch]$Reject) {
+function Case($name, [scriptblock]$change, $eligible = $false, $action = 'HOLD', [switch]$Reject,
+    [string]$Reason, [string]$WithoutReason) {
     $h = 'a' * 40; $m = 'b' * 40
     $script:pr = @{
         number = 1; url = 'https://github.com/danswett/agent-bridge/pull/1'; title = 'Ordinary change'
         state = 'OPEN'; isDraft = $false; isCrossRepository = $false; baseRefName = 'main'
         headRefOid = $h; baseRefOid = $m; mergeStateStatus = 'CLEAN'
         headRef = @{ compare = @{ aheadBy = 0; baseTarget = @{ oid = $h }; headTarget = @{ oid = $m } } }
-        labels = @{ totalCount = 0; nodes = @() }
-        files = @{ totalCount = 1; pageInfo = @{ hasNextPage = $false }; nodes = @(@{ path = 'README.md'; changeType = 'MODIFIED' }) }
+        labels = @{ totalCount = 1; nodes = @(@{ name = 'fixes-main' }) }
+        files = @{ totalCount = 1; pageInfo = @{ hasNextPage = $false }; nodes = @(@{ path = 'pwa/test/example.test.js'; changeType = 'MODIFIED' }) }
         commits = @{ nodes = @(@{ commit = @{ oid = $h; status = @{ contexts = @(
             (Status 'merge-rule' 'agent-bridge-merge-rule'), (Status 'independent-review' 'danswett')
         ) } } }) }
     }
     $script:response = @{ data = @{ rateLimit = @{ remaining = 4800; limit = 5000 }
-        repository = @{ rule = @{ text = $script:deployedRule; oid = 'd' * 40 }; pullRequests = @{ pageInfo = @{ hasNextPage = $false }; nodes = @($script:pr) } } } }
+        repository = @{ main = @{ target = @{ oid = $m } }; rule = @{ text = $script:deployedRule; oid = 'd' * 40 }
+            pullRequests = @{ pageInfo = @{ hasNextPage = $false; endCursor = 'page-1' }; nodes = @($script:pr) } } } }
     $script:exitCode = 0; $script:localRule = $script:deployedRule
+    $script:nextPages = @()
     try {
         & $change
-        $global:MergeShepherdFake = @{ calls = 0; exitCode = $script:exitCode; response = $script:response; localRule = $script:localRule }
+        $pages = @($script:response) + $script:nextPages
+        $global:MergeShepherdFake = @{ calls = 0; exitCode = $script:exitCode; pages = $pages; localRule = $script:localRule }
         $rows = @(& $subject | ConvertFrom-Json)
         if ($Reject) { throw 'Expected a read failure, not a plan.' }
-        if ($rows[0].eligible -ne $eligible -or $rows[0].action -cne $action -or $global:MergeShepherdFake.calls -ne 1) {
+        $expectedRows = @($pages | ForEach-Object { $_.data.repository.pullRequests.nodes }).Count
+        if ($rows.Count -ne $expectedRows -or $rows[0].eligible -ne $eligible -or $rows[0].action -cne $action -or
+            $global:MergeShepherdFake.calls -ne $pages.Count) {
             throw "Unexpected plan: $($rows | ConvertTo-Json -Compress)"
         }
+        if (($Reason -and $rows[0].reason -notmatch $Reason) -or
+            ($WithoutReason -and $rows[0].reason -match $WithoutReason)) { throw "Unexpected hold reason: $($rows[0].reason)" }
+        if (-not $eligible -and $rows[0].command) { throw 'A held PR must not print a merge command.' }
         if ($eligible -and $action -eq 'WOULD_MERGE' -and $rows[0].command -cne
             "gh pr merge 1 --repo danswett/agent-bridge --squash --match-head-commit $h") { throw 'Merge must pin the full head and retain branches.' }
         if ($action -eq 'WOULD_UPDATE_BRANCH' -and $rows[0].afterUpdate -notmatch '19:01.*own.*hunk.*CI') {
@@ -53,12 +68,14 @@ function Case($name, [scriptblock]$change, $eligible = $false, $action = 'HOLD',
         else { $script:failed++; "FAIL ${name}: $_" }
     }
 }
-Case 'an ordinary exact-head receipt and App verdict can enter the queue' {} $true 'WOULD_MERGE'
+Case 'a main-exempt exact-head receipt and App verdict can enter the queue' {} $true 'WOULD_MERGE'
 Case 'a behind head proposes only an update and revalidation' { $pr.headRef.compare.aheadBy = 2 } $true 'WOULD_UPDATE_BRANCH'
 Case 'a required BEHIND state cannot propose a merge' { $pr.mergeStateStatus = 'BEHIND'; $pr.headRef.compare.aheadBy = 1 } $true 'WOULD_UPDATE_BRANCH'
 Case 'drafts hold' { $pr.isDraft = $true }
-Case 'hold labels win over stale green' { $pr.labels.nodes = @(@{ name = 'hold' }); $pr.labels.totalCount = 1 }
-Case 'unread labels hold' { $pr.labels.totalCount = 1 }
+Case 'hold labels win over stale green' {
+    $pr.labels.nodes += @{ name = 'hold' }; $pr.labels.totalCount = 2
+} -Reason 'Held or incomplete labels' -WithoutReason 'Main-green'
+Case 'unread labels hold' { $pr.labels.totalCount = 2 }
 Case 'unresolved or blocked state holds' { $pr.mergeStateStatus = 'BLOCKED' }
 Case 'conflicts hold' { $pr.mergeStateStatus = 'DIRTY' }
 Case 'unknown merge state holds' { $pr.mergeStateStatus = 'UNKNOWN' }
@@ -72,21 +89,31 @@ Case 'a later failed receipt replaces an old success' {
     $pr.commits.nodes[0].commit.status.contexts += $s
 }
 Case 'a pending merge-rule holds' { $pr.commits.nodes[0].commit.status.contexts[0].state = 'PENDING' }
-Case 'sensitive files require a second family even with green merge-rule' { $pr.files.nodes[0].path = 'quality/run.ps1' }
-Case 'untrusted local rules cannot remove the second reader' { $pr.files.nodes[0].path = 'quality/run.ps1'; $script:localRule = $script:deployedRule.Replace('  - quality/**', '') }
-Case 'the configured status-row exception still permits one reader' { $pr.files.nodes[0].path = 'docs/status.md' } $true 'WOULD_MERGE'
+Case 'sensitive files require a second family even with green merge-rule' {
+    $pr.files.nodes[0].path = 'tests/AgentBridge.Quality.Tests/ExampleTests.cs'
+} -Reason 'Two independent families' -WithoutReason 'Main-green'
+Case 'untrusted local rules cannot remove the second reader' {
+    $pr.files.nodes[0].path = 'tests/AgentBridge.Quality.Tests/ExampleTests.cs'
+    $script:localRule = $script:deployedRule.Replace('  - tests/AgentBridge.Quality.Tests/**', '')
+} -Reason 'Two independent families' -WithoutReason 'Main-green'
+Case 'the status-row single-reader exception does not exempt main green' {
+    $pr.files.nodes[0].path = 'docs/status.md'
+} -Reason 'Main-green unverified' -WithoutReason 'Two independent families'
 Case 'a security title requires two families' { $pr.title = 'Security: ordinary path' }
-Case 'a security label requires two families' { $pr.labels.nodes = @(@{ name = 'security' }); $pr.labels.totalCount = 1 }
+Case 'a security label requires two families' {
+    $pr.labels.nodes += @{ name = 'security' }; $pr.labels.totalCount = 2
+} -Reason 'Two independent families' -WithoutReason 'Main-green'
 Case 'a failed second receipt also holds ordinary changes' { $pr.commits.nodes[0].commit.status.contexts += Status 'independent-review-2' 'danswett' 'claude-sonnet-5.5 P1' 'FAILURE' }
 Case 'sensitive two-family exact-head receipts pass' {
-    $pr.files.nodes[0].path = 'quality/run.ps1'
+    $pr.files.nodes[0].path = 'tests/AgentBridge.Quality.Tests/ExampleTests.cs'
     $pr.commits.nodes[0].commit.status.contexts += Status 'independent-review-2' 'agent-bridge-receipts' 'claude-sonnet-5.5 CLEAN'
 } $true 'WOULD_MERGE'
 Case 'same-family receipts cannot supply two readers' {
-    $pr.files.nodes[0].path = 'quality/run.ps1'; $pr.commits.nodes[0].commit.status.contexts += Status 'independent-review-2' 'danswett'
-}
-Case 'renames conservatively require two families' { $pr.files.nodes[0].changeType = 'RENAMED' }
-Case 'incomplete file lists hold' { $pr.files.pageInfo.hasNextPage = $true }
+    $pr.files.nodes[0].path = 'tests/AgentBridge.Quality.Tests/ExampleTests.cs'
+    $pr.commits.nodes[0].commit.status.contexts += Status 'independent-review-2' 'danswett'
+} -Reason 'Two independent families' -WithoutReason 'Main-green'
+Case 'renames conservatively require two families' { $pr.files.nodes[0].changeType = 'RENAMED' } -Reason 'Two independent families'
+Case 'incomplete file lists hold' { $pr.files.pageInfo.hasNextPage = $true } -Reason 'Incomplete files'
 Case 'a moving main invalidates the comparison' { $pr.headRef.compare.headTarget.oid = 'c' * 40 }
 Case 'a missing comparison holds' { $pr.headRef.compare = $null }
 Case 'eligible PRs get distinct four-minute slots' {
@@ -98,5 +125,47 @@ Case 'GraphQL partial errors fail closed' { $response.errors = @(@{ message = 'u
 Case 'an exhausted budget fails closed' { $response.data.rateLimit.remaining = 499 } -Reject
 Case 'gh failure is not an empty queue' { $script:exitCode = 1 } -Reject
 Case 'missing deployed rules cannot fall back to local rules' { $response.data.repository.rule.text = $null } -Reject
+Case 'a lagging PR base still plans an update against the real main tip' {
+    $pr.baseRefOid = 'c' * 40; $pr.headRef.compare.aheadBy = 3
+} $true 'WOULD_UPDATE_BRANCH'
+Case 'an old comparison cannot impersonate the actual main tip' { $response.data.repository.main.target.oid = 'e' * 40 }
+Case 'missing main-tip proof fails closed' { $response.data.repository.main = $null } -Reject
+Case '149 open PRs produce a complete plan across two pages' {
+    $other = $response | ConvertTo-Json -Depth 30 | ConvertFrom-Json -AsHashtable
+    $response.data.repository.pullRequests.nodes = @(1..100 | ForEach-Object { $pr })
+    $response.data.repository.pullRequests.pageInfo.hasNextPage = $true
+    $other.data.repository.pullRequests.nodes = @(101..149 | ForEach-Object { $pr })
+    $other.data.repository.Remove('rule'); $other.data.repository.Remove('main'); $script:nextPages = @($other)
+} $true 'WOULD_MERGE'
+Case 'a broken second page cannot return a partial plan' {
+    $response.data.repository.pullRequests.pageInfo.hasNextPage = $true
+    $script:nextPages = @(@{ errors = @(@{ message = 'page unavailable' }) })
+} -Reject
+Case 'a repeated pagination cursor fails closed' {
+    $response.data.repository.pullRequests.pageInfo.hasNextPage = $true
+    $script:nextPages = @($response)
+} -Reject
+Case 'a missing pagination cursor fails closed' {
+    $response.data.repository.pullRequests.pageInfo.hasNextPage = $true
+    $response.data.repository.pullRequests.pageInfo.endCursor = $null
+} -Reject
+Case 'an unapproved newest second receipt cannot hide an authorized failure' {
+    $pr.commits.nodes[0].commit.status.contexts += Status 'independent-review-2' 'stranger'
+} -Reason 'Unapproved newest receipt creator'
+Case 'an unapproved newest first receipt holds' {
+    $pr.commits.nodes[0].commit.status.contexts[1].creator.login = 'stranger'
+} -Reason 'Unapproved newest receipt creator'
+Case 'a stale App success cannot prove main green for an ordinary PR' {
+    $pr.labels = @{ totalCount = 0; nodes = @() }; $pr.files.nodes[0].path = 'README.md'
+} -Reason 'Main-green unverified'
+Case 'test-only files without the exempt label cannot bypass unverified main' {
+    $pr.labels = @{ totalCount = 0; nodes = @() }
+} -Reason 'Main-green unverified'
+Case 'the exempt label without test-only files cannot bypass unverified main' {
+    $pr.files.nodes[0].path = 'README.md'
+} -Reason 'Main-green unverified'
+Case 'one nonexempt file keeps main green unverified' {
+    $pr.files.nodes += @{ path = 'README.md'; changeType = 'MODIFIED' }; $pr.files.totalCount = 2
+} -Reason 'Main-green unverified'
 "Tests: $script:passed passed, $script:failed failed"
 if ($script:failed) { throw "$script:failed merge-shepherd checks failed" }
