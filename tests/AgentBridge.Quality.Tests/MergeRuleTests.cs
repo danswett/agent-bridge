@@ -1963,17 +1963,57 @@ public class MergeRuleTests
         Assert.InRange(reads.Count, 1, mostCalls);
     }
 
-    // A run passed over for its parent still running is followed by the next run, which walks the same chain again: nothing it read is read twice.
+    // A run passed over for its parent still running is followed by the next run, which walks the same chain again. What a COMPLETED run gave is
+    // not read twice; what the still-running run (107) gave, and the page of runs that lists it, is read again: it can change between two walks.
     [Fact]
-    public void A_run_passed_over_for_a_parent_still_running_leaves_the_next_run_nothing_to_read_again()
+    public void A_run_passed_over_for_a_parent_still_running_leaves_the_next_run_nothing_completed_to_read_again()
     {
-        var runs = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
-
-        var (posted, reads) = RelianceReads(runs, (9, Relies(8)), (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+        var runs = MainRunsAged(MainNow, (109, "completed", "success", 1, 5), (108, "completed", "success", 1, 10), (107, "in_progress", null, 1, 25), (106, "completed", "success", 1, 90));
+        // Three-digit ids: Sha pads "c<id>" with zeros, so Sha(1) and Sha(10) would be the same sha.
+        var (posted, reads) = RelianceReads(runs, (109, Relies(108)), (108, Relies(107)), (107, RelyNone), (106, RelyNone));
 
         Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
-        var twice = reads.GroupBy(p => p, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        var twice = reads.GroupBy(p => p, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key)
+            .Where(p => !p.Contains("/actions/runs/107/", StringComparison.Ordinal) && !p.Contains($"head_sha={Sha(107)}", StringComparison.Ordinal)
+                && !p.Contains("per_page=20&page=", StringComparison.Ordinal)).ToList();
         Assert.True(twice.Count == 0, $"read more than once in one evaluation: {string.Join(", ", twice)}");
+    }
+
+    // A read that failed is not kept: the next walk reads the run again, as it always has. A run 7 whose first read throws (fresh, so never skipped)
+    // while it is only read ahead, or that is unreadable on both reads of one walk (old, so skipped by that walk), is read again when the chain reaches it.
+    [Theory]
+    [InlineData(4, "500", 1)]
+    [InlineData(60, "404", 2)]
+    public void A_run_whose_jobs_could_not_be_read_is_read_again_by_the_next_walk(int ageOfRun7, string failure, int times)
+    {
+        var runs = MainRunsAged(MainNow, (9, "completed", "success", 1, 2), (8, "completed", "success", 1, 3), (7, "completed", "success", 1, ageOfRun7));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = failure }, new Dictionary<long, int> { [7] = times },
+            new Dictionary<long, string> { [9] = Relies(8), [8] = Relies(7), [7] = RelyNone });
+
+        Assert.True(posted.Contains(" success merge-rule ", StringComparison.Ordinal), posted);
+    }
+
+    // A parent seen running is read again: it can finish between two walks, and a failure it ends in keeps main red.
+    [Fact]
+    public void A_parent_seen_running_that_then_fails_keeps_main_red_not_passed_over_for_an_older_run()
+    {
+        var running = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
+        var failed = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 25), (6, "completed", "success", 1, 90));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: running, changeAfterLookup: (Sha(7), failed),
+            planRecords: new Dictionary<long, string> { [9] = Relies(8), [8] = Relies(7), [7] = RelyNone, [6] = RelyNone });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain, utcNow: () => MainNow);
+
+            var posted = Assert.Single(github.Posted);
+            Assert.True(posted.Contains(" failure merge-rule ", StringComparison.Ordinal), posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
     }
 
     // A record that is not in the shape is an error, never a guess that the run relied on nothing. Its raw text reaches the log, so
@@ -3570,9 +3610,14 @@ public class MergeRuleTests
 
     static readonly string RelyNone = $"base={Sha(1)} relied-parent=none";
 
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null, int overlapOf = 0, Func<string, bool>? overlapOn = null, IReadOnlyDictionary<long, string>? planRecords = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null, int overlapOf = 0, Func<string, bool>? overlapOn = null, IReadOnlyDictionary<long, string>? planRecords = null, (string Sha, string Runs)? changeAfterLookup = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
+
+        // Main's runs as they are now: after the first lookup of changeAfterLookup's sha, the runs it names (a run that was going has finished).
+        bool changed;
+
+        string Runs() => changed && changeAfterLookup is { } change ? change.Runs : mainRuns ?? MainRuns((1, "completed", "success", 1));
 
         // What was recorded, as a copy: a read still in flight may add to it while a test looks, and a list
         // enumerated while it is written throws.
@@ -3671,7 +3716,7 @@ public class MergeRuleTests
             if (path.Contains("/git/ref/heads/", StringComparison.Ordinal))
             {
                 if (failMain) throw new InvalidOperationException("gh: HTTP 502");
-                using var all = JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+                using var all = JsonDocument.Parse(Runs());
                 return JsonDocument.Parse(JsonSerializer.Serialize(new { @object = new
                 {
                     sha = mainHead ?? all.RootElement.GetProperty("workflow_runs").EnumerateArray().FirstOrDefault().GetProperty("head_sha").GetString(),
@@ -3679,10 +3724,12 @@ public class MergeRuleTests
             }
             if (path.Contains("&head_sha=", StringComparison.Ordinal))
             {
-                using var all = JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+                using var all = JsonDocument.Parse(Runs());
                 var matching = all.RootElement.GetProperty("workflow_runs").EnumerateArray()
                     .Where(run => run.GetProperty("head_sha").GetString() == path[(path.LastIndexOf('=') + 1)..]).ToArray();
-                return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = matching.Length, workflow_runs = matching }));
+                var answer = JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = matching.Length, workflow_runs = matching }));
+                if (changeAfterLookup is { } change && path.EndsWith($"head_sha={change.Sha}", StringComparison.Ordinal)) { changed = true; }
+                return answer;
             }
             if (path.Contains("/actions/workflows/", StringComparison.Ordinal))
             {
@@ -3691,7 +3738,7 @@ public class MergeRuleTests
                     var page = int.Parse(path[(path.LastIndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture);
                     return page > mainRunPages.Length ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRunPages[page - 1]);
                 }
-                return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+                return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(Runs());
             }
             if (path.Contains("/actions/runs/", StringComparison.Ordinal))
             {
@@ -3717,7 +3764,7 @@ public class MergeRuleTests
                     return JsonDocument.Parse(mainJobPages[page - 1]);
                 }
                 if (mainJobs is not null) return JsonDocument.Parse(mainJobs);
-                using var all = JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
+                using var all = JsonDocument.Parse(Runs());
                 var run = all.RootElement.GetProperty("workflow_runs").EnumerateArray().Single(r =>
                     path.Contains($"/actions/runs/{r.GetProperty("id").GetInt64()}/jobs?", StringComparison.Ordinal));
                 return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = 5, jobs =

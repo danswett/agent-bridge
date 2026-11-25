@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using JobsRead = System.Threading.Tasks.Task<(System.Collections.Generic.List<System.Text.Json.JsonElement> Jobs, bool Unreadable)>;
 
 namespace AgentBridge.Quality;
 
@@ -217,22 +218,26 @@ static class MergeRuleCommand
         public System.Collections.Concurrent.ConcurrentDictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
-        /// Main's job lists, one read per run for the whole evaluation (#4604): each reliance hop walks main's history again from its newest run, and
-        /// must not read a run's jobs again. The read is a task so a run read ahead and a run reached later share one.
+        /// Main's job lists of COMPLETED runs, one read per run for the whole evaluation (#4604): each reliance hop walks main's history again from
+        /// its newest run, and must not read a finished run's jobs again. A run still going is never kept (its jobs change), nor is a read that
+        /// failed or found the run unreadable (RunJobsTask drops it), so the next walk reads it again. The task is lazy: it starts once, whoever asks first.
         /// </summary>
-        public System.Collections.Concurrent.ConcurrentDictionary<long, Task<(List<JsonElement> Jobs, bool Unreadable)>> RunJobs { get; } = new();
+        public System.Collections.Concurrent.ConcurrentDictionary<long, Lazy<JobsRead>> RunJobs { get; } = new();
 
         readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonElement> restBodies = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// A REST read of main's CI whose answer the evaluation may reuse (a page of runs, a parent's runs, a plan job's annotations): read once,
-        /// then served from memory. A failed read is not kept. The body is a copy that outlives the response.
+        /// A REST read of main's CI whose answer the evaluation may reuse (a page of runs, a parent's runs, a plan job's annotations): kept, and
+        /// served from memory, only once <paramref name="settled"/> says the answer can no longer change (the runs in it are all completed). A read
+        /// that failed is not kept. The body is a copy that outlives the response.
         /// </summary>
-        public JsonElement RestOnce(string path)
+        public JsonElement RestOnce(string path, Func<JsonElement, bool> settled)
         {
             if (restBodies.TryGetValue(path, out var known)) { return known; }
             using var doc = Rest(path);
-            return restBodies[path] = doc.RootElement.Clone();
+            var body = doc.RootElement.Clone();
+            if (settled(body)) { restBodies[path] = body; }
+            return body;
         }
 
         /// <summary>Main's CI, read once at the start of the run (ReadMain), so every verdict in it sees the same main.</summary>
@@ -759,7 +764,8 @@ static class MergeRuleCommand
     static string? ReliedParent(Session session, JsonElement run, Dictionary<string, JsonElement> jobs)
     {
         if (!jobs.TryGetValue("plan", out var plan)) { return null; }
-        var notes = session.RestOnce($"repos/{session.Slug}/check-runs/{plan.GetProperty("id").GetInt64()}/annotations?per_page=100");
+        // A plan job that has finished has written its annotations for good.
+        var notes = session.RestOnce($"repos/{session.Slug}/check-runs/{plan.GetProperty("id").GetInt64()}/annotations?per_page=100", _ => plan.GetProperty("status").GetString() == "completed");
         var records = notes.EnumerateArray().Where(n => n.TryGetProperty("title", out var title) && title.GetString() == "plan-base").ToList();
         if (records.Count > 1) { throw new InvalidOperationException($"{records.Count} plan-base records on one run"); }
         if (records.Count == 0)
@@ -790,7 +796,7 @@ static class MergeRuleCommand
         {
             var name = $"relied on parent {MergeRule.Short(parent)}";
             if (depth >= MaxRelianceDepth) { return (Reliance.Red, $"{name}: its chain of reliance is deeper than {MaxRelianceDepth}"); }
-            var listed = session.RestOnce($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&head_sha={parent}");
+            var listed = session.RestOnce($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&head_sha={parent}", RunsCompleted);
             var runs = listed.GetProperty("workflow_runs").EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()).ToList();
             if (runs.Count == 0) { return (Reliance.Red, $"{name}, which has no CI run"); }
             var parentRun = runs[0];
@@ -826,7 +832,7 @@ static class MergeRuleCommand
 
     /// <summary>
     /// A run old enough to skip is read once more after this pause before it is: one transient 404 or 5xx must not skip a main run (they take
-    /// 26 to 35 minutes, so most are older than the grace). There is no memory between evaluations: a run unreadable on both reads of one evaluation is skipped.
+    /// 26 to 35 minutes, so most are older than the grace). There is no memory between walks of main's history, or between evaluations: a run unreadable on both reads of one walk is skipped by that walk, and the next walk reads it again.
     /// </summary>
     internal static TimeSpan UnreadableRetryAfter { get; set; } = TimeSpan.FromSeconds(3);
 
@@ -872,6 +878,29 @@ static class MergeRuleCommand
         }
     }
 
+    // Whether every run in a list answer has completed: only then can the answer no longer change, and the evaluation may keep it (Session.RestOnce).
+    static bool RunsCompleted(JsonElement body) =>
+        body.TryGetProperty("workflow_runs", out var runs) && runs.ValueKind == JsonValueKind.Array && runs.GetArrayLength() > 0
+        && runs.EnumerateArray().All(r => r.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String && status.GetString() == "completed");
+
+    // One run's job list, read on a thread of its own: the read blocks on a gh process, and on a busy or small pool it would queue behind other
+    // work and the reads would not overlap after all. A COMPLETED run's task is shared by every walk of the evaluation (#4604), started once; a run
+    // still going is read afresh each time (its jobs change), and so is one whose last read failed or found it unreadable.
+    static JobsRead RunJobsTask(Session session, JsonElement run)
+    {
+        JobsRead Start() => Task.Factory.StartNew(() => ReadRunJobs(session, run), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        if (!run.TryGetProperty("status", out var status) || status.ValueKind != JsonValueKind.String || status.GetString() != "completed") { return Start(); }
+        var id = run.GetProperty("id").GetInt64();
+        var kept = session.RunJobs.GetOrAdd(id, _ => new Lazy<JobsRead>(Start));
+        var task = kept.Value;
+        if (task.IsCompleted && (!task.IsCompletedSuccessfully || task.Result.Unreadable))
+        {
+            session.RunJobs.TryRemove(new KeyValuePair<long, Lazy<JobsRead>>(id, kept));
+            return session.RunJobs.GetOrAdd(id, _ => new Lazy<JobsRead>(Start)).Value;
+        }
+        return task;
+    }
+
     // The runs read ahead (CompletedMainCore) are all finished when this ends, whether the walk reached
     // them or found its answer first: nothing is read, counted or recorded once a caller has its verdict,
     // so what it then enumerates (the reads it made, the points it spent) is not written under it. A read
@@ -897,25 +926,20 @@ static class MergeRuleCommand
         var seen = 0;
         for (var page = 1; ; page++)
         {
-            var doc = session.RestOnce($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&page={page}");
+            var doc = session.RestOnce($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&page={page}", RunsCompleted);
             var runs = doc.GetProperty("workflow_runs");
             // The newest run is read alone: it usually answers, and a read is a quota point. Once a run has
             // not, the runs below it are read together, a few at a time, and each answer is used in order,
             // so the answer is the one reading them one after another gave. A failed read of a run not yet
             // reached is raised when that run is, not before.
             var ordered = runs.EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()).Select(r => r.Clone()).ToList();
-            var ahead = new Task<(List<JsonElement> Jobs, bool Unreadable)>?[ordered.Count];
+            var ahead = new JobsRead?[ordered.Count];
             for (var at = 0; at < ordered.Count; at++)
             {
                 if (ahead[at] is null)
                     for (var next = at; next < Math.Min(ordered.Count, at + (at == 0 ? 1 : RunsAtOnce)); next++)
                     {
-                        var readRun = ordered[next];
-                        // A thread of its own: the read blocks on a gh process, and on a busy or small pool it would
-                        // queue behind other work and the reads would not overlap after all.
-                        // A run another walk of this evaluation already read (or is reading) is not read again.
-                        started.Add(ahead[next] = session.RunJobs.GetOrAdd(readRun.GetProperty("id").GetInt64(),
-                            _ => Task.Factory.StartNew(() => ReadRunJobs(session, readRun), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)));
+                        started.Add(ahead[next] = RunJobsTask(session, ordered[next]));
                     }
                 var run = ordered[at];
                 var id = run.GetProperty("id").GetInt64();
