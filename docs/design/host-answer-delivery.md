@@ -116,7 +116,9 @@ findings were matcher patches, and most failed closed (safe, but the answer was 
 
 The lesson is that exact matching is safe but brittle, and every CLI repaint is a new liveness bug.
 
-Tests: `tests/AgentBridge.Host.Tests/AnswerFlowTests.cs` (2404 lines) covers these cases:
+Tests: `tests/AgentBridge.Host.Tests/AnswerFlowTests.cs` (about 4000 lines now; the line numbers below date from when it had 2404, so
+find a case by its name) covers these cases. Its negative-path waits are test-only options kept in named constants at the top of the class
+(`Confirm`, `Recheck`, `Reset`, `Words`, `Resume`), half of what they were, so the class no longer holds a ~280 s floor under Host.Tests (#2454):
 
 * repaints (746, 1980, 2010);
 * held Enters and identical retries (823, 847, 872);
