@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using System.Globalization;
 using System.Xml.Linq;
 using Xunit;
 
@@ -104,6 +105,69 @@ public sealed class MachineTileTests
     [InlineData(2, 0, "2 machines · 0 online")]
     public void Fleet_summary_counts_machines_and_online_only(int total, int online, string want) =>
         Assert.Equal(want, MachineTile.Fleet(total, online));
+
+    static string? Id(XElement e) => (string?)e.Attribute("AutomationProperties.AutomationId");
+    static XElement MachinesPane() => MainWindow().Descendants().Single(e => Id(e) == "MachinesPane");
+    static XElement Tile() => MachinesPane().Descendants().Single(e => Id(e) == "MachineRow");
+
+    // #2604: every machine is an expanded card in an equal-width wrapping grid that fills the page.
+    [Fact]
+    public void Fleet_cards_fill_the_page_in_a_wrapping_grid_not_one_capped_column()
+    {
+        var pane = MachinesPane();
+        var list = pane.Descendants().Single(e => Id(e) == "MachineList");
+
+        Assert.DoesNotContain(list.AncestorsAndSelf().TakeWhile(e => e != pane), e => e.Attribute("MaxWidth") is not null);
+        var ns = list.Name.Namespace;
+        var layout = Assert.Single(list.Elements().Where(e =>
+            e.Name == ns + (list.Name.LocalName + ".ItemsPanel") ||
+            e.Name == ns + (list.Name.LocalName + ".Layout")));
+        var panel = layout.Name.LocalName.EndsWith(".ItemsPanel", StringComparison.Ordinal)
+            ? Assert.Single(Assert.Single(layout.Elements(ns + "ItemsPanelTemplate")).Elements())
+            : Assert.Single(layout.Elements());
+        Assert.Contains(panel.Name, new[] { ns + "ItemsWrapGrid", ns + "VariableSizedWrapGrid", ns + "UniformGridLayout" });
+        Assert.Equal("Horizontal", (string?)panel.Attribute("Orientation"));
+    }
+
+    // #2604: two bar rows, CPU then Memory, inside the tile after Health and before Running.
+    [Fact]
+    public void Tile_draws_CPU_then_Memory_bars_after_Health_and_before_Running()
+    {
+        var order = Tile().Descendants().ToList();
+        var health = order.FindIndex(e => Id(e) == "MachineHealth");
+        var cpu = order.FindIndex(e => (string?)e.Attribute("Text") == "CPU");
+        var memory = order.FindIndex(e => (string?)e.Attribute("Text") == "Memory");
+        var running = order.FindIndex(e => Id(e) == "MachineRunning");
+
+        Assert.True(health >= 0 && cpu > health && memory > cpu && running > memory,
+            $"Health {health}, CPU {cpu}, Memory {memory}, Running {running}");
+    }
+
+    // #2604: each bar row keeps fixed label, bar and value columns, so refreshed figures never move it.
+    [Theory]
+    [InlineData("CPU")]
+    [InlineData("Memory")]
+    public void Each_bar_row_keeps_fixed_label_bar_and_value_columns(string label)
+    {
+        var text = Tile().Descendants().SingleOrDefault(e => (string?)e.Attribute("Text") == label);
+
+        Assert.NotNull(text);
+        var row = text.Parent!;
+        Assert.Equal("Grid", row.Name.LocalName);
+        var ns = row.Name.Namespace;
+        var columns = row.Elements(ns + "Grid.ColumnDefinitions").Elements(ns + "ColumnDefinition").ToList();
+        Assert.Equal(3, columns.Count);
+        foreach (var column in new[] { columns[0], columns[2] })
+        {
+            Assert.True(double.TryParse((string?)column.Attribute("Width"), NumberStyles.Float, CultureInfo.InvariantCulture, out var width)
+                && double.IsFinite(width) && width > 0, "Label and value columns must have fixed positive widths.");
+        }
+        Assert.Equal("*", (string?)columns[1].Attribute("Width"));
+        Assert.Equal("0", (string?)text.Attribute("Grid.Column") ?? "0");
+        var bar = Assert.Single(row.Elements(ns + "ProgressBar"));
+        Assert.Equal("1", (string?)bar.Attribute("Grid.Column"));
+        Assert.Contains(row.Elements(ns + "TextBlock"), e => (string?)e.Attribute("Grid.Column") == "2");
+    }
 
     [Theory]
     [InlineData(899, false)]
