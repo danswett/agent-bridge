@@ -619,6 +619,7 @@ public sealed partial class MainViewModel : Observable
     // Every second, on the UI thread.
     public void Tick()
     {
+        ReleaseRecent();
         foreach (var m in machines) { m.Toasts?.Tick(); }
         foreach (var o in OfflineMachines) { o.Tick(); }
         SyncBanner();

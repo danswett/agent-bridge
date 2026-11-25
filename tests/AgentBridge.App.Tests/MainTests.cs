@@ -153,22 +153,37 @@ public sealed class MainTests : IAsyncLifetime
         Assert.True(TestUi.Read(() => focused.Editing));
     }
 
-    [Fact]
-    public async Task A_question_that_bypasses_the_hold_cannot_be_answered_for_half_a_second()
+    [Theory]
+    [InlineData(RowHold.Pointer)]
+    [InlineData(RowHold.Focus)]
+    public async Task A_pointer_over_a_row_or_focus_in_one_holds_pending_activity_until_it_ends(RowHold hold)
     {
         await SnapshotAsync();
         ui.Post(() =>
         {
             main.SortIndex = (int)SessionSort.Recent;
-            Card("old").Editing = true;
+            Card("asking").Row!.Hold(hold, true);
         });
-        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Choice() with { Id = "new-question" }, updated: Make.T0.AddMinutes(1)));
-        await Wait.UntilAsync(() => Card("asking").Session.Question?.Id == "new-question", "the new question");
-        Assert.False(TestUi.Read(() => Card("asking").Question!.CanAnswer));
-        Pass(TimeSpan.FromMilliseconds(499));
-        Assert.False(TestUi.Read(() => Card("asking").Question!.CanAnswer));
-        Pass(TimeSpan.FromMilliseconds(1));
-        Assert.True(TestUi.Read(() => Card("asking").Question!.CanAnswer));
+        await Update("old", 2);
+        Pass(TimeSpan.FromSeconds(6));
+        Assert.Equal(["asking", "old"], Order());
+        ui.Post(() => Card("asking").Row!.Hold(hold, false));
+        Assert.Equal(["old", "asking"], Order());
+    }
+
+    [Fact]
+    public async Task A_focused_row_that_a_new_question_moves_asks_for_its_focus_back()
+    {
+        await SnapshotAsync();
+        ui.Post(() =>
+        {
+            main.SortIndex = (int)SessionSort.Recent;
+            Card("old").Row!.Hold(RowHold.Focus, true);
+        });
+        await host.SendAsync(Events.SessionUpsert, Make.Session("old", question: Make.Choice() with { Id = "other" }, updated: Make.T0));
+        await Wait.UntilAsync(() => Card("old").Session.Question?.Id == "other", "the question");
+        Assert.Equal(["old", "asking"], Order());
+        Assert.True(TestUi.Read(() => Card("old").WantsRowFocus));
     }
 
     async Task Update(string id, int minute)
