@@ -365,6 +365,96 @@ public class BackgroundTests
         Assert.Equal(new Background { Shells = 1 }, aged.BackgroundUnaged);
     }
 
+    // Claude's TaskStop kills a background command and writes no task-notification for it, so only its result says it is gone (#1396: finished
+    // sessions read SHELL on Home Assistant for hours). A stop counts only when it succeeded: a task_type of local_bash, a task_id, a result.
+    static string TaskStopResult(string toolId, int s, string? taskId, string taskType = "local_bash", bool error = false, bool withResult = true)
+    {
+        var result = System.Text.Json.Nodes.JsonNode.Parse(Claude.ToolResult(toolId, s, error))!.AsObject();
+        if (withResult)
+        {
+            result["toolUseResult"] = new System.Text.Json.Nodes.JsonObject
+            { ["message"] = "Successfully stopped task", ["task_id"] = taskId, ["task_type"] = taskType, ["command"] = "sleep 99999" };
+        }
+        return result.ToJsonString();
+    }
+
+    static string BackgroundStart(string toolId, int s, string shell)
+    {
+        var started = System.Text.Json.Nodes.JsonNode.Parse(Claude.ToolResult(toolId, s))!.AsObject();
+        started["toolUseResult"] = new System.Text.Json.Nodes.JsonObject { ["backgroundTaskId"] = shell };
+        return started.ToJsonString();
+    }
+
+    static string BackgroundCall(string toolId, int s) =>
+        Claude.Assistant(s, "tool_use", Claude.ToolUse(toolId, "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "sleep 99999", ["run_in_background"] = true }));
+
+    async Task<(Fixture F, AgentBridge.Host.Core.SessionSource Source, string Transcript)> ClaudeWithShells(string id, params string[] shells)
+    {
+        var f = new Fixture();
+        var transcript = f.ClaudeTranscript(id);
+        f.ClaudeRegistration(id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript, Claude.User("go", 1));
+        var n = 2;
+        foreach (var shell in shells) { Fixture.Append(transcript, BackgroundCall("b" + shell, n++), BackgroundStart("b" + shell, n++, shell)); }
+        var source = f.Source();
+        await source.RefreshAsync();
+        return (f, source, transcript);
+    }
+
+    [Fact]
+    public async Task A_successful_TaskStop_of_a_Claude_background_command_ends_it_so_the_session_is_no_longer_waiting_on_it()
+    {
+        const string ClaudeId = "c1a0de00-0000-4000-8000-000000000041";
+        var (f, source, transcript) = await ClaudeWithShells(ClaudeId, "bg1");
+        using var _ = f;
+        await using var __ = source;
+        Assert.Equal(new Background { Shells = 1 }, source.Get(ClaudeId)!.Activity.Background);
+
+        Fixture.Append(transcript, TaskStopResult("stop1", 10, "bg1"));
+        await source.RefreshAsync();
+
+        var s = source.Get(ClaudeId)!;
+        Assert.Null(s.Activity.Background);
+        Assert.Null(s.BackgroundUnaged);
+    }
+
+    [Theory]
+    [InlineData("unknown", "local_bash", false, true)]
+    [InlineData("bg1", "local_agent", false, true)]
+    [InlineData("bg1", "", false, true)]
+    [InlineData("bg1", "local_bash", true, false)]
+    [InlineData("bg1", "local_bash", true, true)]
+    [InlineData("", "local_bash", false, true)]
+    [InlineData(null, "local_bash", false, true)]
+    public async Task A_stop_that_is_not_a_successful_local_bash_stop_of_a_known_command_changes_nothing(string? taskId, string taskType, bool error, bool withResult)
+    {
+        const string ClaudeId = "c1a0de00-0000-4000-8000-000000000042";
+        var (f, source, transcript) = await ClaudeWithShells(ClaudeId, "bg1");
+        using var _ = f;
+        await using var __ = source;
+
+        Fixture.Append(transcript, TaskStopResult("stop1", 10, taskId, taskType, error, withResult));
+        await source.RefreshAsync();
+
+        Assert.Equal(new Background { Shells = 1 }, source.Get(ClaudeId)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task Stopping_one_command_twice_ends_only_that_command_and_leaves_the_others_counted()
+    {
+        const string ClaudeId = "c1a0de00-0000-4000-8000-000000000043";
+        var (f, source, transcript) = await ClaudeWithShells(ClaudeId, "bg1", "bg2");
+        using var _ = f;
+        await using var __ = source;
+        Assert.Equal(new Background { Shells = 2 }, source.Get(ClaudeId)!.Activity.Background);
+
+        Fixture.Append(transcript, TaskStopResult("stop1", 20, "bg1"), TaskStopResult("stop2", 21, "bg1"));
+        await source.RefreshAsync();
+
+        Assert.Equal(new Background { Shells = 1 }, source.Get(ClaudeId)!.Activity.Background);
+    }
+
     [Fact]
     public async Task A_stale_shell_leaves_the_shown_background_but_the_unaged_count_keeps_it_for_an_agent_End()
     {

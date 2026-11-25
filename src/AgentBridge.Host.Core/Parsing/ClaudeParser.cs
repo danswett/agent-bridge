@@ -279,6 +279,13 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     {
                         work.ShellStarted(shell, at);
                     }
+                    // TaskStop kills a background command and Claude writes no task-notification for it, so its result is the only word
+                    // that it is gone (#1396). Only a stop that succeeded counts: a local_bash task, named, and a result that is not an error.
+                    else if (Json.Str(result, "task_type") == "local_bash" && Text.NonBlank(Json.Str(result, "task_id")) is { } stopped
+                        && !Blocks(message).Any(b => Json.Str(b, "type") == "tool_result" && Json.Bool(b, "is_error") == true))
+                    {
+                        work.ShellEnded(stopped);
+                    }
                     break;
                 }
             case "assistant":
