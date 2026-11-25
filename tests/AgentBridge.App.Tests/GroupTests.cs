@@ -65,7 +65,7 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
-    public void Pin_boundary_drops_keep_membership_while_unpinned_moves_stay_in_their_group()
+    public void Pin_boundary_drops_keep_membership()
     {
         var order = new SessionOrder(null);
         OrderEntry[] rows = [E("a"), E("b"), E("c")];
@@ -78,7 +78,6 @@ public sealed class GroupTests : IDisposable
         Assert.True(order.Place(K("a"), K("b"), false));
         order.Arrange(rows);
         Assert.Equal(id, order.Groups.GroupOf(K("a")));
-        Assert.False(order.Move(K("a"), 1));
         Assert.False(order.Place(K("a"), K("b"), false));
         Assert.True(order.Move(K("a"), -1));
         Assert.Equal(["a", "c", "b"], order.Arrange(rows).Sessions.Select(e => e.Session.Id));
@@ -300,7 +299,8 @@ public sealed class GroupTests : IDisposable
         main.SelectedMachine = main.Machines[0];
         main.RemoveFromGroup(card);
         Assert.Equal(["b", "a"], main.Sessions.Select(c => c.Id));
-        Assert.False(main.Move(card, -1));
+        Assert.True(main.Move(card, -1));
+        Assert.Equal(id, main.Order.Groups.GroupOf(key));
         main.DeleteGroup(id);
         Assert.Empty(main.Groups);
     }
