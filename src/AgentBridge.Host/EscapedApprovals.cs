@@ -25,9 +25,9 @@ namespace AgentBridge.Host;
 public sealed class EscapedApprovals(P256KeyPair key, string policy, Func<IReadOnlyCollection<string>> devices, Action<string>? log = null, TimeProvider? time = null)
 {
     readonly Action<string> log = log ?? (_ => { });
-    readonly TimeProvider time = time ?? TimeProvider.System;
-    Func<IReadOnlyList<PresenceEntry>>? presence;
-    public RemoteAuthorization? Trust { get; init; }
+    // The checks every person's confirmation needs, shared with clear and send (#804).
+    readonly PersonConfirmations person = new(key, devices, "approve one with escaped characters", NotApproved, time);
+    public RemoteAuthorization? Trust { get => person.Trust; init => person.Trust = value; }
 
     // The devices that may confirm, read at each check: the explicit list (even an empty one), or
     // while there is none the folder-trust devices, and those only while folder trust is on.
@@ -36,13 +36,10 @@ public sealed class EscapedApprovals(P256KeyPair key, string policy, Func<IReadO
     public static Func<IReadOnlyCollection<string>> Devices(IReadOnlyList<string>? listed, Func<bool> folderTrust, Func<IReadOnlyCollection<string>> folderTrustDevices) =>
         listed is { } explicitly ? () => explicitly : () => folderTrust() ? folderTrustDevices() : [];
 
-    // The relay's kinds for a device a person answers from, as for folder trust.
-    static readonly HashSet<string> PersonKinds = new(["pwa", "app"], StringComparer.Ordinal);
-
-    public void Attach(RelayClient? relay) => Volatile.Write(ref presence, relay is null ? null : () => relay.Presence);
+    public void Attach(RelayClient? relay) => person.Attach(relay);
 
     // For tests: who the relay says is connected.
-    internal void AttachPresence(Func<IReadOnlyList<PresenceEntry>>? connected) => Volatile.Write(ref presence, connected);
+    internal void AttachPresence(Func<IReadOnlyList<PresenceEntry>>? connected) => person.AttachPresence(connected);
 
     // Whether hello offers sessions.approveEscaped to this device: advisory, so a card never offers
     // a confirmation that would only be refused.
@@ -59,13 +56,7 @@ public sealed class EscapedApprovals(P256KeyPair key, string policy, Func<IReadO
         {
             return "this machine takes Approve for an approval with escaped characters only at the machine (permissions.escapedApproval); deny it from here, or answer at the machine";
         }
-        if (Trust?.HasRole(peer, TrustedPeerStore.Person) == false) { return "only an independently pinned person key may approve one with escaped characters"; }
-        if (Volatile.Read(ref presence) is not { } connected) { return "this machine is not connected to the relay now"; }
-        var signer = connected().FirstOrDefault(d => d.Id == peer);
-        if (signer is null) { return "the device that signed the confirmation is not connected to the relay now"; }
-        if (!PersonKinds.Contains(signer.Kind)) { return "only a person's phone, browser or Windows app can approve one with escaped characters"; }
-        if (!devices().Contains(peer)) { return NotApproved(peer); }
-        return null;
+        return person.Refusal(peer);
     }
 
     public static string NotApproved(string device) =>
@@ -74,16 +65,8 @@ public sealed class EscapedApprovals(P256KeyPair key, string policy, Func<IReadO
     string? Check(string peer, AnswerRequest request, Question question)
     {
         if (Refusal(peer) is { } refused) { return refused; }
-        var (c, problem) = SignedCommands.Verify(key, request.Confirm!, EscapedApproval.Action, time.GetUtcNow());
+        var (c, problem) = person.Verify(peer, request.Confirm!, EscapedApproval.Action);
         if (c is null) { return problem; }
-        if (c.ExpiresAt - c.IssuedAt > (long)EscapedApproval.MaxLifetime.TotalSeconds) { return $"a confirmation lasts at most {EscapedApproval.MaxLifetime.TotalMinutes:0} minutes"; }
-        if (Trust is { } trust && !trust.PersonKey(request.Confirm!.By)) { return "only an independently pinned person key may approve one with escaped characters"; }
-        var me = Wire.DeviceId(key.Public);
-        if (c.To != me) { return "the confirmation is for another machine to act on"; }
-        // The device that signed is the one asking: a machine of the account can make a key and
-        // sign with it, so the MAC alone says nothing about who pressed.
-        if (c.Principal.Device != peer) { return "the confirmation must come from the device that signed it"; }
-        if (c.Principal.Device == me) { return "this machine cannot confirm for a person"; }
         if (c.Target.Session != request.Id) { return "the confirmation is for another session"; }
         if (c.Target.Question != question.Id) { return "the confirmation is for another question"; }
         if (!Guid.TryParseExact(request.Request, "D", out var asked) || !Guid.TryParseExact(c.Request, "D", out var signed) || asked != signed)
