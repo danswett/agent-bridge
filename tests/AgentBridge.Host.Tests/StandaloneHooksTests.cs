@@ -77,7 +77,8 @@ public sealed class StandaloneHooksTests : IDisposable
             }
         }
         foreach (var link in links) { Directory.Delete(link); }
-        Directory.Delete(root, recursive: true);
+        // The exited hook's image can stay locked for a moment after the process is gone (#2558).
+        TempFolder.TryDelete(root, TimeSpan.FromSeconds(30));
     }
     static void Write(string path, string content)
     {
