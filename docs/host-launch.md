@@ -340,7 +340,9 @@ requires isolation, host provenance, the approved repository/subdirectory, detac
 and clean state, and refuses links and the agent's project configuration. Claude's and
 Codex's lists are confirmed ([agent-launch-scope.md §3](design/agent-launch-scope.md#3-what-an-agent-launch-may-contain),
 which also says what the check cannot guarantee for Codex); other agents fail closed. A
-missing or thrown check also refuses.
+missing or thrown check also refuses. A Codex launch that passes is still refused, on every
+`agent:` route (a grant's and `fleet.launch` included), unless a worker credential was issued
+for it; none is yet.
 
 A refusal removes only the new tree, using an in-memory creation receipt bound to this
 request and the immutable creation commit, using protected, nonrecursive removal.
@@ -354,8 +356,7 @@ ignored or otherwise unsafe data are retained with a readable cleanup reason, ne
 force-deleted. The refusal writes one agent audit
 record; an unavailable audit is reported explicitly. Repeating the request returns its
 remembered result without another tree or audit, and a removed tree spends no worktree slot.
-The start turn is released on refusal. Hourly caps and pipe activation remain separate work:
-the local pipe still refuses agent launches. Person launches and folder-trust handling are
+The start turn is released on refusal. Person launches and folder-trust handling are
 unchanged; user-profile agent settings still apply.
 
 ## Reclaiming finished worktrees

@@ -260,8 +260,11 @@ Where the check looks:
   `CODEX_HOME` named `.codex` and placed above either one refuses too, as does a folder there
   that cannot be listed.
 
-Passing this check does not by itself start a worker: the launch's other gates, the worker's
-credential among them, still apply.
+**Passing this check does not start Codex.** `LaunchService` then refuses every `agent:` or
+fleet Codex launch issued no worker credential: the script fleet route, a grant's (local, or
+`fleet.launch`) and an agent's own, with `ask` or Allow all. A new Codex session has no id to
+bind one to yet, so until one is issued (#4650) none starts, and Codex gets neither the `read`
+(§4) nor the `read+reply` (§11) credential. A person's own launch is unchanged.
 
 **Not guaranteed for Codex:**
 * the person's own settings: `~/.codex` (or `CODEX_HOME`), with its trusted projects, rules,
@@ -279,7 +282,12 @@ credential among them, still apply.
   ruled out, and they are not refused;
 * the list comes from Codex's documentation and its `main` source, not from a test of the
   installed version; a newer Codex may read new places;
-* the check runs once, before the process starts.
+* the check runs once, before the process starts;
+* `ask` does not make Codex ask every time: the host adds no approval flag, so the person's
+  Codex settings and sandbox decide (§8's "every action asks" is not assured);
+* once Codex is given a credential: a launch that never registers leaves a launch record with
+  no session id, and the launched-session check then refuses unrelated sessions (it fails
+  closed; a person's Codex launch does the same).
 
 **Prompt length: keep 16 KiB, refuse longer.** The protocol limit is 16 KiB of UTF-8 in a request
 of at most 20 KiB (`LaunchProtocol.MaxPrompt`/`MaxRequest`; v1-launch.md, "The prompt goes whole"),

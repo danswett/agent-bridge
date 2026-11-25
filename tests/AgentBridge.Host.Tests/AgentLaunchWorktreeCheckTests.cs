@@ -98,6 +98,9 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable, IClassFixture<A
     [InlineData("agency")]
     [InlineData("auto")]
     [InlineData("")]
+    [InlineData("Claude")]
+    [InlineData("CODEX")]
+    [InlineData("codex ")]
     public void An_agent_without_a_confirmed_configuration_list_is_refused(string agent) =>
         Assert.Contains("confirmed", Check(agent: agent));
 
