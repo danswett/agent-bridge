@@ -646,6 +646,8 @@ async Task<int> ServeAsync(HostHandover handover)
     Func<string, bool> hooksNotSetUp = static _ => false;
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit, id => hooksNotSetUp(id));
     launcher.SessionStarted += restore.Launched;
+    // A Codex's registration that names no process is told to be a launch's by what the launch knows (#3644).
+    source.PendingCodexLaunches = launcher.PendingCodexLaunches;
     // Who launched each session, from the authenticated launch principal, for the session watch (#4262); kept 7 days past the last live look.
     var launchOwners = new LaunchOwnerLog(identity.Folder, identity.Key, Log);
     launchOwners.Prune(id => source.Get(id) is not null, DateTimeOffset.UtcNow);

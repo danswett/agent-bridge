@@ -8,7 +8,9 @@ namespace AgentBridge.App.Tests;
 // that is 112 px taller than estimated pushes the block down 112, and the correction's +112 on the offset takes
 // exactly that back. A sample therefore records the block's on-screen displacement for the step (Visible), and
 // what it would have been had the correction been held back (VisibleIfHeld).
-public enum ScrollInput { Wheel, Pan }
+// Inertia (#4607): a trackpad's tail after the last input. The last wheel event has come; the view then coasts, its
+// changes intermediate with the scroller moving, until one final change. Like a pan, it is the person's until it ends.
+public enum ScrollInput { Wheel, Pan, Inertia }
 
 public readonly record struct ScrollSample(int Step, double From, double Requested, double Actual, bool Corrected, double Growth)
 {
@@ -30,7 +32,9 @@ public static class ScrollMeasure
 
     // Steps toward the end from start, by a wheel (a final view change per notch, nothing held between them) or a
     // trackpad pan (the pan holds the view, its steps intermediate, until it is let go and one final change settles it).
-    public static IReadOnlyList<ScrollSample> Run(SessionView view, ScrollInput input, double start, int steps, IReadOnlyList<double>? growth = null, double step = Notch)
+    // stepSizes gives each step its own distance (a trackpad's decaying tail, negative is up); wheelDelta is what each wheel event reports (a trackpad's sub-notch 15, say; negative is down).
+    public static IReadOnlyList<ScrollSample> Run(SessionView view, ScrollInput input, double start, int steps, IReadOnlyList<double>? growth = null, double step = Notch,
+        IReadOnlyList<double>? stepSizes = null, int wheelDelta = 120)
     {
         growth ??= TallToolRows;
         var samples = new List<ScrollSample>();
@@ -38,19 +42,20 @@ public static class ScrollMeasure
         view.Moved(offset);
         view.Scroller.Targets.Clear();
         if (input == ScrollInput.Pan) { view.GestureForProbe("pan"); }
+        if (input == ScrollInput.Inertia) { view.Scroller.Wheel(wheelDelta); view.GestureForProbe("scroll"); }
         for (var i = 0; i < steps; i++)
         {
-            var requested = Math.Clamp(offset + step, 0, view.Scroller.ScrollableHeight);
-            if (input == ScrollInput.Wheel) { view.Scroller.Wheel(); }
+            var requested = Math.Clamp(offset + (stepSizes is null ? step : stepSizes[i % stepSizes.Count]), 0, view.Scroller.ScrollableHeight);
+            if (input == ScrollInput.Wheel) { view.Scroller.Wheel(wheelDelta); }
             view.Moved(requested, final: input == ScrollInput.Wheel);
             var from = offset;
             var g = growth[i % growth.Count];
             offset = Settle(view, g, requested, out var corrected);
             samples.Add(new(i, from, requested, offset, corrected, g));
         }
-        if (input == ScrollInput.Pan)
+        if (input != ScrollInput.Wheel)
         {
-            // Let go: the view is still again, and the layout since may now be put back.
+            // Let go (or the tail ends): the view is still again, and the layout since may now be put back.
             view.GestureForProbe("none");
             view.Moved(offset);
             var g = growth[steps % growth.Count];

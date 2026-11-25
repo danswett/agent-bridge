@@ -1635,6 +1635,19 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return null;
     }
 
+    // The Codex launches still waiting for their session, as discovery binds a hook registration that
+    // names no process to one (SessionSource.PendingCodexLaunches, #3644): Codex 0.172's hooks do not say
+    // which process ran them, so only this host knows which Codex is its own. Not one given a
+    // session id (none is for Codex), nor one already bound to a session.
+    public IReadOnlyList<PendingCodexLaunch> PendingCodexLaunches()
+    {
+        lock (pendingGate)
+        {
+            return [.. pending.Where(p => p.Launcher.Kind == AgentKind.Codex && p.SessionId.Length == 0 && p.Bound is null && !p.Closed)
+                .Select(p => new PendingCodexLaunch(p.Started.ProcessId, p.Started.StartedAt, p.Launched.Cwd))];
+        }
+    }
+
     // Whether a Codex session is new to a launch: not there when it started, and started after.
     bool Candidate(Pending p, string id, out SessionProcess? process)
     {
