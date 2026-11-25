@@ -696,6 +696,9 @@ async Task<int> ServeAsync(HostHandover handover)
     Log(settings.EscapedApproval == EscapedApproval.Confirm
         ? $"an approval with escaped characters is approved from a device by a two-step confirmation, from {(settings.EscapedApprovalDevices is null ? "the folder-trust devices while folder trust is on (launch.remoteFolderTrustDevices)" : $"{settings.EscapedApprovalDevices.Count} device(s) (permissions.escapedApprovalDevices)")}"
         : "an approval with escaped characters is approved only at the machine (permissions.escapedApproval)");
+    // Clear and send (#804): the same approved devices, and off unless replies.clearAndSend is confirm.
+    var replyClear = new ReplyClearConfirmations(identity.Key, settings.ClearAndSend,
+        EscapedApprovals.Devices(settings.EscapedApprovalDevices, () => launcher.RemoteFolderTrust, () => launcher.TrustDevices), Log) { Trust = trustedPeers };
     // Before the connector, which launches from the card through it.
     // The host's own updates, from the machine's update entity: through the app's package, which
     // carries the host (Windows only: elsewhere nothing packages it yet). Installing ends this
@@ -810,6 +813,7 @@ async Task<int> ServeAsync(HostHandover handover)
         G5 = g5,
         TrustAnswers = trustAnswers,
         EscapedApprovals = escapedApprovals,
+        ReplyClear = replyClear,
         Updates = updates,
         Restore = () => restore.Notice,
         SignIn = signIn,
@@ -1146,6 +1150,7 @@ async Task<int> ServeAsync(HostHandover handover)
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
             escapedApprovals.Attach(relay);
+            replyClear.Attach(relay);
             updates.Attach(relay);
             manage.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
@@ -1208,6 +1213,7 @@ async Task<int> ServeAsync(HostHandover handover)
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
             escapedApprovals.Attach(null);
+            replyClear.Attach(null);
             updates.Attach(null);
             manage.Attach(null);
         }

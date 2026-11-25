@@ -186,6 +186,8 @@ public sealed class SessionService
     // Approve on an approval the host escaped anything in, confirmed from a person's device through
     // the relay only (EscapedApprovals, #803).
     public EscapedApprovals? EscapedApprovals { get; init; }
+    // Clear and send (#804): offered in hello to a person's approved device while replies.clearAndSend is confirm. Nothing acts on a clear yet (3b).
+    public ReplyClearConfirmations? ReplyClear { get; init; }
 
     // update.*, through the relay only, and never on a read-only machine (UpdateService).
     public UpdateService? Updates { get; init; }
@@ -747,6 +749,7 @@ public sealed class SessionService
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
         if (answers?.Available == true && channel is SecureChannel peer && EscapedApprovals?.Offers(peer.PeerId) == true) { offered.Add(EscapedApproval.Capability); }
+        if (replies is not null && channel is SecureChannel clearer && ReplyClear?.Offers(clearer.PeerId) == true) { offered.Add(AgentBridge.Protocol.ReplyClear.Capability); }
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
         if (Restore is not null) { offered.Add(RestoreProtocol.Capability); }
         if (Manage is not null) { offered.AddRange(Manage.Offered(channel)); }
@@ -771,7 +774,10 @@ public sealed class SessionService
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await replies.ReplyAsync(request, channel.PeerId, watch: watch);
+        // Clear and send (#804): only a relay device's clear is acted on, with the screen as its draft source; everyone else loses it.
+        var relayPeer = channel is SecureChannel relayed ? relayed.PeerId : null;
+        request = ReplyClearWiring.Apply(request, relayPeer, ReplyClear);
+        var result = ReplyClearWiring.Offer(await replies.ReplyAsync(request, channel.PeerId, watch: watch), relayPeer, ReplyClear);
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
             push?.Replied(channel.PeerId, request.Id);

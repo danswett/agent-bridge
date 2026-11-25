@@ -231,7 +231,7 @@ public sealed partial class ReplyService : ISessionReplier
         }
         // Clear callbacks identify this host-verified authority generation; new or revoked
         // authority cannot inherit escrow, even with the same device and request UUID.
-        var owner = (peer ?? "", request.Id, request.ClearConfirmation, request.ClearDraftSource,
+        var owner = (peer ?? "", request.Id, request.ClearConfirmation, request.ClearDraftSource, request.ClearDraftFromScreen,
             request.ClearConfirmation is null ? null : request.IntentSource,
             request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent, request.HandoffText,
             // The caller class: a refusal that shows a person the box is never replayed from the cache to anyone else (#804).
@@ -1095,7 +1095,8 @@ public sealed partial class ReplyService : ISessionReplier
         return Refused(person ? reason : ReplyReasons.Shared(reason)) with
         {
             Refusal = occupied ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
-            Input = occupied && person ? ComposerInput.From(box!.Content) : null,
+            // Marked clearable when the host could clear this box: one row that fits whole (the clear's own rule). The policy and the device decide who is offered it.
+            Input = occupied && person ? ComposerInput.From(box!.Content) is var input ? input with { Clearable = box.Lines == 1 && !input.Truncated } : null : null,
         };
     }
 

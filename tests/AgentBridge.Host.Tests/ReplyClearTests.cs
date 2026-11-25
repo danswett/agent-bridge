@@ -40,13 +40,13 @@ public sealed class ReplyClearTests
     }
 
     [Fact]
-    public async Task A_reply_refused_for_a_full_copilot_box_shows_the_box_and_offers_no_clear()
+    public async Task A_reply_refused_for_a_full_copilot_box_shows_the_box_and_marks_a_one_row_box_clearable_for_a_person()
     {
         await using var h = await Harness.Create(); h.Draft = "rerun the tests";
         var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true });
         Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
         Assert.Equal(("rerun the tests", ComposerInput.From("rerun the tests").Digest), (result.Input!.Text, result.Input.Digest));
-        Assert.False(result.Input!.Clearable);
+        Assert.True(result.Input!.Clearable);
         Assert.Equal(0, h.Replies);
     }
 
@@ -75,6 +75,51 @@ public sealed class ReplyClearTests
         var again = await h.Replier.ReplyAsync(asked with { IntentSource = () => ReplyIntent.Unknown });
         Assert.Null(again.Input);
         Assert.DoesNotContain("someone left", JsonSerializer.Serialize(again, ProtocolJson.Options));
+    }
+
+    // The screen-derived draft source (#804, owner's option A): the box as the screen shows it, outer whitespace the one named loss.
+    [Theory]
+    [InlineData("rerun the tests", "rerun the tests")]
+    [InlineData("  two  spaces  ", "two  spaces")]
+    public async Task A_screen_derived_draft_clears_and_sends_with_one_text_in_the_digest_and_the_cleared_note(string typed, string expected)
+    {
+        await using var h = await Harness.Create(); h.Draft = typed;
+        string? digestSeen = null;
+        var request = h.Request() with { ClearDraftSource = null, ClearDraftFromScreen = true, ClearConfirmation = digest => { digestSeen = digest; return null; } };
+        var result = await h.Replier.ReplyAsync(request);
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(expected, result.Cleared!.Text);
+        Assert.Equal(ComposerInput.From(expected).Digest, digestSeen);
+        Assert.Equal(1, h.Replies);
+    }
+
+    [Fact]
+    public async Task A_screen_derived_draft_changed_between_the_read_and_the_keys_deletes_nothing()
+    {
+        await using var h = await Harness.Create(); h.Draft = "rerun the tests";
+        h.BeforeKeys = () => h.Draft = "rerun the tests and more";
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearDraftSource = null, ClearDraftFromScreen = true, ClearConfirmation = _ => null });
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Equal("rerun the tests and more", h.Draft);
+        Assert.Equal(0, h.Replies);
+    }
+
+    [Fact]
+    public async Task Neither_a_source_nor_the_screen_flag_refuses_before_any_key()
+    {
+        await using var h = await Harness.Create(); h.Draft = "rerun the tests";
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearDraftSource = null, ClearDraftFromScreen = false, ClearConfirmation = _ => null });
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Equal("rerun the tests", h.Draft);
+    }
+
+    [Fact]
+    public async Task A_box_that_is_too_long_to_return_whole_is_never_marked_clearable()
+    {
+        await using var h = await Harness.Create(); h.Draft = new string('a', 600);
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true });
+        Assert.Equal(ReplyRefusal.Occupied, result.Refusal);
+        Assert.False(result.Input!.Clearable);
     }
 
     [Fact]
