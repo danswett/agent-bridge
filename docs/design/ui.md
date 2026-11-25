@@ -1852,6 +1852,14 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     counts it: "2 new · Jump to latest". The pill fades in and out as Arriving and leaving
     (§5.3), and nothing pops (#659). Choosing it scrolls smoothly to the end, as Scroll to a
     question does (§5.3). At the end, the view follows new messages; sending a message always goes to the end.
+    - **Built in the PWA (#1720).** "More than a screen" is the conversation's height (exactly a screen is not
+      more). The count is of turns that arrived below since the reader left the end; reading to the end clears it.
+      The pill is in no layout (a row with no height, the pill drawn up from its foot): it never moves what is read, so
+      a wheel or trackpad moves the conversation exactly as far as it says (#4243), over the pill too (it passes the
+      wheel on). It is a 44 px target. On a phone, and installed on an iPhone or iPad at any width, it rides above
+      the reply area (`--foot-h`). A jump scrolls the app's own way (the header and reply area hold as for Scroll to a
+      question), is the reader's to interrupt, and ends following the end even if the end moved. While it shows, the
+      "Question waiting" bar (#1657) leaves it the place.
   - **H3a A question while reading back:** a question or approval that arrives while the person
     reads history is added at the end like any message, and the pill reads "Question · Jump to
     latest" in Needs you's text colour. Nothing scrolls on its own (Scroll to a question never

@@ -1,7 +1,10 @@
 import { h } from './dom.js';
 import { HistoryView } from './history-view.js';
+import { awayFrom } from './jump-latest.js';
 
 export const BOTTOM_TOLERANCE_PX = 4;
+// A smooth jump with no scrollend (Safari) is over after this.
+const JUMP_LIMIT_MS = 1500;
 const streamedTurns = new WeakMap();
 
 // A history page may lag the live words of the current deferred turn.
@@ -30,6 +33,8 @@ export class ScrollFollow {
   following = true;
   #top = 0;
   #max = 0;
+  #client = 0;
+  #told = { away: false, count: 0 };
   #app = null;
   #listeners = new AbortController();
   #observer;
@@ -41,8 +46,8 @@ export class ScrollFollow {
   #tail = null;
   #rendered = null;
 
-  constructor(element, { input = element, content = () => element.children, scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {} } = {}) {
-    Object.assign(this, { element, content, scroll, visible, canFollow, canDefer, onFollow });
+  constructor(element, { input = element, content = () => element.children, scroll = (fn) => fn(), visible = () => element.getClientRects().length > 0, canFollow = () => true, canDefer = () => true, onFollow = () => {}, onPosition = () => {} } = {}) {
+    Object.assign(this, { element, input, content, scroll, visible, canFollow, canDefer, onFollow, onPosition });
     const { signal } = this.#listeners;
     element.addEventListener('scroll', () => this.read(), { signal, passive: true });
     for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) {
@@ -58,8 +63,25 @@ export class ScrollFollow {
   }
 
   remember() {
+    const client = this.element.clientHeight;
     this.#top = this.element.scrollTop;
-    this.#max = this.element.scrollHeight - this.element.clientHeight;
+    this.#max = this.element.scrollHeight - client;
+    this.#client = client;
+    this.#tell();
+  }
+
+  // The reader has gone back more than a screen (the "Jump to latest" pill, ui.md §6.4 H3), and how many turns have come
+  // in below since, from what it holds. A session still laying out is not the reader going back: while following, not away.
+  get away() { return !this.following && awayFrom({ top: this.#top, max: this.#max, client: this.#client }); }
+  get newCount() { return this.#pending.size; }
+
+  // Said once for each change of those two, not for each scroll.
+  #tell() {
+    if (!this.#client) { return; }
+    const state = { away: this.away, count: this.#pending.size };
+    if (state.away === this.#told.away && state.count === this.#told.count) { return; }
+    this.#told = state;
+    this.onPosition(state);
   }
 
   get reading() { return this.following && this.#max - this.#top <= BOTTOM_TOLERANCE_PX; }
@@ -101,6 +123,37 @@ export class ScrollFollow {
     return el.scrollTop;
   }
 
+  // The "Jump to latest" pill: to the end, with what waits there drawn, and following it from there. A smooth scroll
+  // is the person's to interrupt; one that lands (with scrollend or without it) hands the view back to following.
+  jump(behavior = 'auto') {
+    const el = this.element;
+    this.following = true;
+    this.resume();
+    const ended = new AbortController();
+    let release = () => {};
+    const done = () => { ended.abort(); release(); };
+    this.scroll(() => {
+      release = this.appScroll(() => {
+        if (this.#pending.size) { this.#rejoin(); }
+        el.scrollTo({ top: Math.max(0, el.scrollHeight - el.clientHeight), behavior });
+      }, false);
+    });
+    // Over: it landed, it stopped (scrollend), or it has gone on too long. The end may have moved while it scrolled (a
+    // reply grew below), so it carries on to the end there is now.
+    const finish = () => { done(); this.remember(); this.after(); };
+    const atEnd = () => el.scrollHeight - el.clientHeight - el.scrollTop <= BOTTOM_TOLERANCE_PX;
+    if (atEnd()) { finish(); return; }
+    const { signal } = ended;
+    el.addEventListener('scroll', () => { if (atEnd()) { finish(); } }, { signal });
+    el.addEventListener('scrollend', finish, { signal });
+    const limit = setTimeout(finish, JUMP_LIMIT_MS);
+    signal.addEventListener('abort', () => clearTimeout(limit));
+    // The person's own touch or wheel takes it over: where they are now is where they read.
+    for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) {
+      (this.input ?? el).addEventListener(type, () => { done(); this.following = atEnd(); this.remember(); }, { signal, capture: true, passive: true });
+    }
+  }
+
   // Choosing a cached session starts at its latest, not at the previous reading position.
   open() {
     this.following = true;
@@ -110,6 +163,7 @@ export class ScrollFollow {
 
   #rejoin() {
     this.#pending.clear();
+    this.#tell();
     this.shown = this.#latest;
     this.onFollow();
     if (this.#tail) {
@@ -127,6 +181,7 @@ export class ScrollFollow {
       this.shown = session;
     } else if (session.activity.turn !== this.shown.activity.turn) {
       this.#pending.add(session.activity.turn);
+      this.#tell();
     } else {
       this.shown = session;
     }
