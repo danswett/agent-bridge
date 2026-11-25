@@ -132,14 +132,32 @@ whose host crashed before the worker registered stops counting after 40 minutes 
 run of failed workers cannot starve the dispatcher. The unregistered record itself stays, so a process that is somehow still running is never adopted.
 Agent-started sessions and coordinators have their own caps above and are not counted here, so a full fleet never blocks a coordinator.
 
+## Tuning the limits (#2768)
+
+All of these live in the host's config under `agents.limits`, and only the person at the machine changes them (edit the file; `config set` refuses these keys, and nothing an agent can call writes them).
+They are read afresh for each check, so a change applies at the next launch with no restart.
+
+| Limit | Default | Bounds | What to watch |
+|---|---|---|---|
+| `launchesPerOriginPerHour`, `launchesPerMachinePerHour` | 3, 10 | 1 up to the default (lower only) | `rate-limited` refusals and their retry delay in the launch audit |
+| `liveAgentLaunched`, `agentLaunchedIdleHours` | 6, 2 | 1 up to the default (lower only) | `live-limit` refusals; idle ends in the host log |
+| `fleetPerHour`, `liveFleetWorkers` | 8, 6 | 1 to 60 (the owner can raise them) | the cap refusal ("fleet launch limit: ... limits in force: ...") and its `fleet.launch.cap` audit row; how many workers run |
+
+**A temporary raise of the fleet caps.** To lift `fleetPerHour` and `liveFleetWorkers` for a while, write `agents.limits.raise` with the values wanted
+(for example `{ "fleetPerHour": 20, "liveFleetWorkers": 12 }`). The raise lasts **4 hours from the moment the host first reads that block**, then lapses by itself and the
+base limits apply again. The expiry is the host's own stamp (`limit-raise.json` in the profile folder), not a value in the config and not a timer, so a restart keeps the
+same expiry, reading it again never extends it, and an edited block starts a new 4 hours. A raise above 60 is 60, and a raise below the base limit never lowers it. Starting
+and lapsing are each an audit row (`fleet.limit.raise`), and a cap refusal while it lasts names it ("limits in force: 20 an hour, 12 live; temporary raise until 14:00 UTC").
+If the stamp cannot be written, the raise is ignored. The agent-launch limits above have no raise: their default is also their ceiling.
+
 Only the person at the machine changes `agents.limits` in the host's config.
 The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
 attempts per agent; they may be lowered, never made unlimited. The gate reads changes
 on its next check and records `rate-limited` refusals with the retry delay and caps in
 force. Watch refusal counts and retry delays in the launch audit before and after a
 change. Refusal audit records share the pipe's per-principal windowing: 60 per hour,
-then counted summaries at most once a minute. Live limits, idle ending, restart durability
-and temporary raises are C2 work, not guarantees of this staged readback.
+then counted summaries at most once a minute. Live limits, idle ending and restart durability
+are C2 work, not guarantees of this staged readback; the owner's temporary raise of the fleet caps is described under "Tuning the limits".
 
 ## Dispatch facts seam (#2788, not wired)
 

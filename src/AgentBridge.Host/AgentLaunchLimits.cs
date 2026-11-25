@@ -14,6 +14,10 @@ public sealed record AgentLaunchLimits
     public const int FleetCeiling = 60;
     public int FleetPerHour { get; init; } = 8;
     public int LiveFleetWorkers { get; init; } = 6;
+    // A temporary raise (agents.limits.raise, #2768): the owner's block in config.json; the 4-hour expiry is the host's own stamp (LimitRaise), never a config value.
+    public int? FleetPerHourRaise { get; init; }
+    public int? LiveFleetWorkersRaise { get; init; }
+    public bool HasRaise => FleetPerHourRaise is not null || LiveFleetWorkersRaise is not null;
 
     internal static AgentLaunchLimits Read(JsonElement? limits, bool required, List<string> problems)
     {
@@ -27,7 +31,20 @@ public sealed record AgentLaunchLimits
             AgentLaunchedIdleHours = ReadLimit("agentLaunchedIdleHours", d.AgentLaunchedIdleHours),
             FleetPerHour = ReadFleet("fleetPerHour", d.FleetPerHour),
             LiveFleetWorkers = ReadFleet("liveFleetWorkers", d.LiveFleetWorkers),
+            FleetPerHourRaise = ReadRaise("fleetPerHour"),
+            LiveFleetWorkersRaise = ReadRaise("liveFleetWorkers"),
         };
+
+        // The raise block: each value a whole number from 1, clamped to the hard ceiling; anything else is no raise for that limit. An unknown key is said.
+        int? ReadRaise(string key)
+        {
+            if (limits is not { } section || !section.TryGetProperty("raise", out var raise) || raise.ValueKind != JsonValueKind.Object) { return null; }
+            foreach (var p in raise.EnumerateObject())
+            {
+                if (p.Name is not ("fleetPerHour" or "liveFleetWorkers") && key == "fleetPerHour") { problems.Add($"agents.limits.raise.{p.Name} is not a setting; ignored"); }
+            }
+            return raise.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n) && n >= 1 ? Math.Min(n, FleetCeiling) : null;
+        }
 
         // A whole number from 1: above the hard ceiling it is the ceiling, and anything else is the default, so never unlimited. Neither is reported as a problem: a
         // problem in the agents section turns the whole policy (and so the route) off, and a clamp or a fallback only ever narrows what was asked.

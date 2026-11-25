@@ -1272,7 +1272,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         Config = settings.Launch,
         // The fleet route's hourly and live caps, read fresh for each launch from the owner's config.json (#2770).
         FleetAdmission = () => serveFolder is not null && HostSettings.CurrentAgents(serveFolder) is { Problem: null } current
-            ? new AgentBridge.Host.Delivery.Launch.FleetLimits(current.Policy.Limits.Launch.FleetPerHour, current.Policy.Limits.Launch.LiveFleetWorkers) : null,
+            ? LimitRaise.Effective(serveFolder, current.Policy.Limits.Launch, DateTimeOffset.UtcNow, new AgentAuditLog(serveFolder)) : null,
         HomeAssistantEnabled = settings.HomeAssistant.Enabled || settings.HomeAssistant.EnabledRequested,
         HomeAssistantBaseUrl = settings.HomeAssistant.BaseUrl,
         // A session waiting to be restored keeps its worktree as a live one does (#780).
