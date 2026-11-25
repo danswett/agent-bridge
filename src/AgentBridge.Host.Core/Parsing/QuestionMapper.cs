@@ -513,7 +513,8 @@ internal static class QuestionMapper
     // Claude's AskUserQuestion: { questions: [ { question, header, multiSelect, options:
     // [ { label, description } ] } ] }. Claude records the answer under the question text.
     // Option descriptions carry real content but have no place on an Option, so they are
-    // listed under the message, as the old bridge did.
+    // listed under the message, each question's under its own text (never one merged list: a
+    // description read under the wrong question answers the wrong thing).
     //
     // Claude's prompt also takes free text ("Type something"), but no field offers it:
     // agent-ha-bridge's only walk to it overshoots the list by two rows and was never run
@@ -525,7 +526,6 @@ internal static class QuestionMapper
     {
         var fields = new List<Field>();
         var questions = new List<string>();
-        var notes = new StringBuilder();
         var drivable = true;
         if (Json.Arr(input, "questions") is { } list)
         {
@@ -533,7 +533,7 @@ internal static class QuestionMapper
             {
                 var text = Json.Str(q, "question");
                 if (string.IsNullOrWhiteSpace(text)) { continue; }
-                questions.Add(text);
+                var note = new StringBuilder(text);
                 var options = new List<Option>();
                 if (Json.Arr(q, "options") is { } opts)
                 {
@@ -544,10 +544,12 @@ internal static class QuestionMapper
                         options.Add(new Option(label));
                         if (Json.Str(o, "description") is { Length: > 0 } description)
                         {
-                            notes.Append("\n- **").Append(label).Append("**: ").Append(description);
+                            // A blank row before the list, so it is one in markdown.
+                            note.Append(note.Length == text.Length ? "\n\n- **" : "\n- **").Append(label).Append("**: ").Append(description);
                         }
                     }
                 }
+                questions.Add(note.ToString());
                 var multi = Json.Bool(q, "multiSelect") == true;
                 if (options.Count == 0 || (multi && options.Count > 9) || fields.Any(f => f.Name == text)) { drivable = false; }
                 fields.Add(new Field
@@ -563,7 +565,6 @@ internal static class QuestionMapper
         }
         if (fields.Count is 0 or > 4 || Json.IsLossy(input)) { drivable = false; }
         var message = questions.Count == 0 ? "Claude needs an answer." : string.Join("\n\n", questions);
-        if (notes.Length > 0) { message += "\n" + notes; }
         return new Question
         {
             Id = id,

@@ -81,6 +81,11 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     // The tool calls and questions of the turn, as history counts their parts.
     readonly HashSet<string> _replyTools = new(StringComparer.Ordinal);
     readonly HashSet<string> _replyQuestions = new(StringComparer.Ordinal);
+    // The ids of the last results read. Claude Code can write a result before the entry holding its
+    // call (parallel calls): a question read after its own result is over, not asked.
+    readonly HashSet<string> _resulted = new(StringComparer.Ordinal);
+    readonly Queue<string> _resultedOrder = new();
+    const int MaxResulted = 64;
     // Notices queued and not yet delivered, by task id, oldest first, each by its content's hash.
     // The queue carries no mark of who wrote to it, and a prompt the person types while the agent
     // works is queued the same way, so a queued notice is not an end until its delivery is (see
@@ -106,6 +111,8 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         _wokenAt.Clear();
         _unclaimed.Clear();
         _unclaimedDropped = false;
+        _resulted.Clear();
+        _resultedOrder.Clear();
     }
 
     // A command or delegate the skim saw start may have ended in bytes never read; counted, it
@@ -446,6 +453,11 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 var id = Json.Str(r, "tool_use_id");
                 S.Tools.End(id, Json.Bool(r, "is_error") != true, at);
                 S.Answer(id);
+                if (id is not null && _resulted.Add(id))
+                {
+                    _resultedOrder.Enqueue(id);
+                    if (_resultedOrder.Count > MaxResulted) { _resulted.Remove(_resultedOrder.Dequeue()); }
+                }
             }
             S.SetStatus(SessionStatus.Working);
             S.Activity(at);
@@ -551,6 +563,8 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                         if (name == "AskUserQuestion" && input is { } i)
                         {
                             S.Ask(QuestionMapper.FromClaudeAskUserQuestion(id, i, Now(at)));
+                            // Its result was read first: the call is over as it is read.
+                            if (_resulted.Contains(id)) { S.Answer(id); }
                         }
                         break;
                     }
