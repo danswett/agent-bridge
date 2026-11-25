@@ -57,7 +57,7 @@ public sealed class AgentLiteDeliveryTests
         BusyQueueStore? busyStore;
         public BusyQueueStore Store => busyStore ??= new(Clock);
         public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
-        public LiteDeliver Build(DeliveryLaneScheduler? lane = null, LaneComposition? composition = null) => new([
+        public LiteDeliver Build(DeliveryLaneScheduler? lane = null, LaneComposition? composition = null, LaneNoticeSink? notices = null) => new([
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
@@ -70,7 +70,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store, Watcher = Watch ? new BusyQueueWatcher(Store, Clock) : null };
+            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Notices = notices, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store, Watcher = Watch ? new BusyQueueWatcher(Store, Clock) : null };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -234,6 +234,23 @@ public sealed class AgentLiteDeliveryTests
         var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
         Assert.False(result.Typed);
         Assert.Equal(LiteCodes.Busy, result.Code);
+        Assert.Empty(f.Typed);
+    }
+    [Fact]
+    public async Task A_sender_who_asks_again_is_told_what_the_lane_did_with_a_dropped_message()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        using var sink = new LaneNoticeSink(lane);
+        var heard = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lane.Notices += _ => heard.TrySetResult(); // after the sink's own handler
+        var deliver = f.Build(composition: lane, notices: sink);
+        Assert.Equal(LiteKind.Pending, (await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Outcome);
+        f.ProcessAt = DateTimeOffset.UnixEpoch.AddMinutes(1); // a new incarnation: the offer's authority is revoked
+        await lane.Resolve().Scheduler!.DeliverNextAsync(Target);
+        await heard.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var again = await ((ILiteReplayQuery)deliver).QueryAsync(Envelope("hi"), "hi", default);
+        Assert.Equal($"dropped id={Req} reason=revoked authority", again.Code);
         Assert.Empty(f.Typed);
     }
     sealed class LaneRig : IDisposable

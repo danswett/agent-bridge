@@ -142,7 +142,7 @@ internal sealed partial class DeliveryLaneScheduler
                 {
                     Record(session, head.Header, head.Body, DeliveryState.Dropped, "revoked authority");
                     RemoveItem(session, head.Header.Id); fences.Remove((session, head.Header.Id));
-                    notices.Add(new(session, head.Header, $"Target {session}: dropped id={head.Header.Id} reason=revoked authority."));
+                    notices.Add(new(session, head.Header, $"Target {session}: dropped id={head.Header.Id} reason=revoked authority.", DeliveryNoticeCause.RevokedAuthority));
                     return LaneResult.Waiting;
                 }
                 if (GrantLapsed(session, head, authority.Sender))
