@@ -627,7 +627,7 @@ share, a removable or optical drive; folders approved before this are not remove
 (`WorkspaceApproval`) with one closed code per refusal, so a later in-app Add folder can ask the
 same check. Every command takes `--profile <name>`.
 
-`workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`,
+`workspace add` and `remove`, `config set` and `unset`, `ha off` and `ha on`, `ha token set` and `clear`,
 `sign-in`, `scripts add|revoke` and `host-sign init` are for a person. They refuse to run
 (exit code 4) inside an agent session: when
 anything they run inside is an agent CLI (`copilot`, `claude`, `codex`, `agency`, or Node or Bun

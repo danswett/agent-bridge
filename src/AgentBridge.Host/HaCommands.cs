@@ -108,8 +108,11 @@ public static class HaCommands
     {
         var audit = new AgentAuditLog(folder, log: error.WriteLine);
         var state = enabled ? "on" : "off";
+        // The stored value before this change goes on both audit rows: missing, null or malformed reads off, as the connector does.
+        var (settings, problem) = HostSettings.Load(folder);
+        var was = problem is not null ? "unknown" : settings.HomeAssistant.EnabledRequested ? "on" : "off";
         var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString(), "person:local", [],
-            "host.homeAssistant", "profile", "requested", $"{state}; restart-required");
+            "host.homeAssistant", "profile", "requested", $"{state}; was {was}; restart-required");
         if (!audit.Append(entry))
         {
             error.WriteLine("Not changed: the Home Assistant control audit could not be written.");
@@ -117,7 +120,6 @@ public static class HaCommands
         }
         var result = 1;
         string outcome;
-        var (settings, problem) = HostSettings.Load(folder);
         if (problem is not null) { error.WriteLine(problem); outcome = "refused"; }
         else if (enabled && HaGate.WhyNot(settings.HomeAssistant with { Enabled = true }, devBuild,
             HaTokenStore.Exists(folder), canCheckAgentHaBridge) is { } why)
@@ -130,7 +132,7 @@ public static class HaCommands
             result = ConfigCommands.SetAuditedHaConnection(folder, enabled, output, error);
             outcome = result == 0 ? $"configured-{state}" : "failed";
         }
-        if (!audit.Append(entry with { Outcome = outcome, Reason = result == 0 ? entry.Reason : $"{state}; {outcome}" }))
+        if (!audit.Append(entry with { Outcome = outcome, Reason = result == 0 ? entry.Reason : $"{state}; was {was}; {outcome}" }))
         {
             error.WriteLine(result == 0
                 ? "The connection setting was saved, but its terminal audit is incomplete. It takes effect only after restarting the host."
