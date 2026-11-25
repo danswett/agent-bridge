@@ -197,6 +197,29 @@ links, and explicitly supersede old authority instructions during a handoff.
 Do not remove the old tracker until all active rows have a verified destination;
 a Project-permission failure is not an empty queue or a completed migration.
 
+## Test waits and load flakes (#2558)
+
+A full Host.Tests or App.Tests run on one CPU starves the thread pool for far longer than a healthy test needs, so a short wait
+bound fails tests that are fine alone, a different one each run. Never raise a bound to make a test pass: that is loosening it.
+Take the wall clock out of the wait instead, by what drives it:
+
+- **A clock in the code under test drives it** (a poll, a retry, a budget): give the test a fake or stepped clock, so its time moves
+  with the service's waits and not the wall (`PollClock`, `FakeTimeProvider`). Where a test already has one, bound the wait on it
+  (`task.WaitAsync(bound, fakeTime)`): the original bound stays and only the test advancing time can run it out.
+- **A plain handoff drives it** (a task completing, a signal the code under test raises): await that event itself
+  (`TaskCompletionSource`, `ManualResetEventSlim`), with no sleep, poll or second number.
+- **A teardown that deletes files** retries while Windows still holds an exited program's image; that adds a retry and loosens no
+  assertion.
+- **A wait that is a product API's own timeout** (`SecureChannel.RequestAsync`'s default 15 s, a `Patience` passed to a request or
+  an open) has no event to await without a product change. Name it in the PR body; the owner decides. Do not raise it meanwhile.
+  Owner-exception candidates, seen failing under load and left as they are: the reply wait in
+  `AnswerFlowTests.A_pre_filled_default_kept_is_delivered_once_however_often_the_request_is_resent` (the default 15 s) and in
+  `RemoteAuthorizationTests.Relay_answers_audit_the_channel_device_and_relay_origin_not_payload_claims` (`Patience`, 10 s).
+
+The family to move to these patterns instead of fixing one flake at a time: the per-class `Patience` (10 s, and 90 s in the migration
+tests) in the Host.Tests and App.Tests classes, `SecureChannel.RequestAsync`'s default 15 s timeout, and about 100 `WaitAsync` literals of
+2 to 30 s in tests/AgentBridge.Host.Tests. A flake in one of them is reported on #2558 with the test name and message.
+
 ## Commands and code for the owner
 
 In any question or message to the owner, put every command or code line in its own
