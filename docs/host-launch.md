@@ -342,7 +342,7 @@ Codex's lists are confirmed ([agent-launch-scope.md §3](design/agent-launch-sco
 which also says what the check cannot guarantee for Codex); other agents fail closed. A
 missing or thrown check also refuses. A Codex launch that passes is still refused, on every
 `agent:` route (a grant's and `fleet.launch` included), unless a worker credential was issued
-for it; none is yet.
+for it. One is issued before the process starts, with no session id yet, and answers only once the launch binds its session by process (Codex binding, above); the launch is refused when issuing fails.
 
 A refusal removes only the new tree, using an in-memory creation receipt bound to this
 request and the immutable creation commit, using protected, nonrecursive removal.

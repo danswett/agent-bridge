@@ -84,8 +84,10 @@ public sealed partial class LaunchFlowTests
         Assert.Null(starter.Specs[0].Environment![Launchers.TokenVariable]);
     }
 
-    [Fact]
-    public async Task A_Codex_fleet_launch_gets_a_read_reply_credential_that_takes_its_session_when_it_registers()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_Codex_fleet_launch_starts_only_with_a_read_reply_credential_that_takes_its_session_when_it_registers(bool issues)
     {
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
         Git(f.Root, "init", "-q", "-b", "main", app);
@@ -94,15 +96,21 @@ public sealed partial class LaunchFlowTests
         Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
         starter.Registers = false;
         var profile = Path.Combine(f.Root, "fleet-profile");
-        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: new AgentCredentials(profile, "machine"),
-            agentWorktreeCheck: (_, _, _) => null, agentWorktreeRefusalAudit: (_, _, _) => true);
+        var credentials = new AgentCredentials(profile, "machine");
+        if (!issues) { Directory.CreateDirectory(Path.Combine(profile, AgentCredentials.FileName) + ".tmp"); }
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: credentials,
+            agentWorktreeCheck: (workspace, made, id) => AgentLaunchWorktreeCheck.Check(workspace, made, id, f.Root), agentWorktreeRefusalAudit: (_, _, _) => true);
         const string principal = "script:machine/dispatcher";
         var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "codex", Workspace = "App", Permissions = LaunchProtocol.AllowAll, Prompt = "fixture" };
         var launching = GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile), new("local", "agent", principal, null), fleet: true, refusal: () => null);
         await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1 || launching.IsCompleted));
-        var early = launching.IsCompleted ? await launching : null;
-        Assert.True(starter.Pids.Count == 1, early is null ? "not started" : $"{early.Outcome}: {early.Reason}");
-        Assert.False(string.IsNullOrEmpty(starter.Specs[0].Environment![Launchers.TokenVariable]));
+        if (!issues)
+        {
+            Assert.Equal(LaunchOutcome.Refused, (await launching).Outcome);
+            Assert.Empty(starter.Specs);
+            return;
+        }
+        Assert.False(string.IsNullOrEmpty(Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]));
         starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId);
         var result = await launching;
 
@@ -112,26 +120,5 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(starter.CodexId, credential.GetProperty("session").GetString());
         Assert.Equal(AgentProtocol.ScopeReadReply, credential.GetProperty("scope").GetString());
         Assert.Equal(1, credential.GetProperty("depth").GetInt32());
-    }
-
-    [Fact]
-    public async Task A_Codex_fleet_launch_whose_credential_cannot_be_issued_is_still_refused()
-    {
-        locator.Installed["codex"] = @"C:\fake\codex.cmd";
-        Git(f.Root, "init", "-q", "-b", "main", app);
-        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
-        Git(app, "add", ".");
-        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
-        var profile = Path.Combine(f.Root, "fleet-profile");
-        var credentials = new AgentCredentials(profile, "machine");
-        Directory.CreateDirectory(Path.Combine(profile, AgentCredentials.FileName) + ".tmp");
-        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: credentials,
-            agentWorktreeCheck: (_, _, _) => null, agentWorktreeRefusalAudit: (_, _, _) => true);
-        const string principal = "script:machine/dispatcher";
-        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "codex", Workspace = "App", Permissions = LaunchProtocol.AllowAll, Prompt = "fixture" };
-        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile), new("local", "agent", principal, null), fleet: true, refusal: () => null);
-
-        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
-        Assert.Empty(starter.Specs);
     }
 }
