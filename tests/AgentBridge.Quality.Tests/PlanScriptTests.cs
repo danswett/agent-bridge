@@ -237,7 +237,7 @@ public class PlanScriptTests
                     : wholeRing || unpaidApp || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
             Assert.Equal("true", outputs["light"]);
             // An unknown tier (app's post_merge) plans as blocking; only exact post-merge names are listed.
-            Assert.Equal(new Dictionary<string, string> { ["app"] = "blocking", ["app-installer"] = "blocking", ["app-installer (win-arm64)"] = "post-merge" },
+            Assert.Equal(new Dictionary<string, string> { ["app"] = "blocking", ["app-installer"] = "blocking", ["app-sbom"] = "blocking", ["app-self-test"] = "blocking", ["app-installer (win-arm64)"] = "post-merge" },
                 JsonSerializer.Deserialize<Dictionary<string, string>>(outputs["tiers"])!.Where(t => t.Key.StartsWith("app", StringComparison.Ordinal)).ToDictionary());
             Assert.Contains("| app-installer | " + (outputs["app-installer"] == "true" ? "yes" : "skipped") + " | blocking; post-merge: `app-installer (win-arm64)` |",
                 File.ReadAllText(Path.Combine(folder, "summary")), StringComparison.Ordinal);

@@ -85,6 +85,8 @@ jobs:
       ha-integration: ${{ steps.select.outputs.ha-integration }}
       app: ${{ steps.select.outputs.app }}
       app-installer: ${{ steps.select.outputs.app-installer }}
+      app-sbom: ${{ steps.select.outputs.app-sbom }}
+      app-self-test: ${{ steps.select.outputs.app-self-test }}
       light: ${{ steps.select.outputs.light }}
       suites: ${{ steps.select.outputs.suites }}
       test-projects: ${{ steps.select.outputs.test-projects }}
@@ -260,7 +262,7 @@ jobs:
           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
           # quality-gate's needs disagree (quality/README.md §4.7).
-          JOBS: product ha-integration app app-installer light
+          JOBS: product ha-integration app app-installer app-sbom app-self-test light
         run: |
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
@@ -269,11 +271,11 @@ jobs:
             # A pull request leaves the windows-11-arm product leg to main; packaging needs
             # an app reason of its own, even in the whole ring.
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
-            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -ExcludePlatform win-arm64 -Jobs $jobs
+            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer,app-sbom,app-self-test -ExcludePlatform win-arm64 -Jobs $jobs
           } elseif ($env:EVENT -eq 'push' -and $env:BASE_KNOWN -eq 'true') {
             # Main keeps every selected platform; proven docs/ordinary tests need no product run.
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
-            ./quality/plan.ps1 -MainPush -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
+            ./quality/plan.ps1 -MainPush -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer,app-sbom,app-self-test -Jobs $jobs
           } else {
             # Unknown main base: HEAD^1 alone cannot prove earlier app changes were packaged.
             # Keep full packaging, as on a manual whole-ring run.
@@ -655,12 +657,37 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Before any local action or dotnet: CachePolicy holds a job that may land on a reused ab-ci machine to that. The same state as
+      # product's (above); a hosted runner discards it anyway.
+      - name: NuGet, .NET tools and MSBuild state for this job only, in a clean workspace
+        shell: pwsh
+        run: |
+          $t = $env:RUNNER_TEMP
+          "NUGET_PACKAGES=$t/nuget-packages", "NUGET_HTTP_CACHE_PATH=$t/nuget-http", "NUGET_PLUGINS_CACHE_PATH=$t/nuget-plugins", "DOTNET_CLI_HOME=$t/dotnet-home", "MSBUILDDISABLENODEREUSE=1" | Add-Content $env:GITHUB_ENV
+          git clean -ffdx
       - uses: ./.github/actions/arm64-foreground
         if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
-      - run: dotnet tool install -g vpk --version 1.2.161
+      # The mirror, as product's (above): this job may run on a reused ab-ci machine (#4104), which can't reach
+      # nuget.org, so its restores, publish and vpk go through the runner's mirror there.
+      - name: NuGet through the runner's mirror, nuget.org-signed packages only (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          . ./quality/nuget-mirror.ps1
+          $cfg = Join-Path $env:RUNNER_TEMP 'mirror.nuget.config'
+          try { New-AbCiNuGetConfig -Source "$env:AGENT_BRIDGE_NUGET_SOURCE" -Path $cfg } catch { Write-Host "::error::$($_.Exception.Message)"; exit 1 }
+          "RestoreConfigFile=$cfg", "NUGET_MIRROR_CONFIG=$cfg" | Add-Content $env:GITHUB_ENV
+      # vpk in this job's own folder, never -g: a global tool persists in the account's profile on a reused machine.
+      - name: vpk, in a folder of this job's own
+        shell: pwsh
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'vpk'
+          dotnet tool install vpk --version 1.2.161 --tool-path $tools @(if ($env:NUGET_MIRROR_CONFIG) { '--configfile', $env:NUGET_MIRROR_CONFIG })
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $tools | Add-Content $env:GITHUB_PATH
       - name: Publish and pack
         shell: pwsh
         env:
@@ -671,17 +698,18 @@ jobs:
         run: |
           ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -Out out/app/notes.md
           ./build/pack-app.ps1 -Version $env:APP_VERSION -Runtime ${{ matrix.runtime }} -Out ${{ matrix.out }} -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
-      - name: The publish folder, for the sign job
+      - name: The publish folder, for the sign job and the x64 self-test and SBOM jobs
         # Uploaded as published, before anything below runs the app from it, so the sign job packs
-        # exactly the files this job built and then tested in the unsigned package.
-        if: env.APP_SIGNING == 'true'
+        # exactly the files this job built, and the self-test (here and in full.yml) runs, and the
+        # SBOM covers, the same bytes. x64 always (the self-test left this job, #4104); Arm64 only to sign.
+        if: matrix.runtime == 'win-x64' || env.APP_SIGNING == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}-publish-${{ env.APP_VERSION }}
           path: ${{ matrix.out }}/publish
           include-hidden-files: true
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
       - name: Only the publish path builds a release host
         # The packed host is a release build exactly when this run publishes: dev here on a pull
         # request. And the property the publish path sets does make one, on this commit.
@@ -698,9 +726,11 @@ jobs:
           if ($release -ne 'release') { Write-Error "-p:AgentBridgeRelease=true built a $release host"; exit 1 }
       - name: The published app draws the demo's cards and answers one
         id: selftest
-        # win-arm64 only (#2026): one self-test flake holds no release; a second failure still fails
-        # the job, so quality-gate's app output and publish-gate are unchanged in what they require.
-        continue-on-error: ${{ matrix.runtime == 'win-arm64' }}
+        # The Arm64 leg's only. x64's left this job (#4104): it needs a desktop, which the ab-ci runners have none of, so it is
+        # the hosted app-self-test job (below, and full.yml's). Arm64: one self-test flake holds no release (#2026); a second
+        # failure still fails the job, so quality-gate's app output and publish-gate are unchanged in what they require.
+        if: matrix.runtime == 'win-arm64'
+        continue-on-error: true
         shell: pwsh
         # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
         run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 720
@@ -748,10 +778,13 @@ jobs:
           retention-days: 7
       # The package's SBOM (quality/README.md §3.3, supply-chain): every NuGet package and project
       # in the published folder, read from its .deps.json files, as CycloneDX. On every build, so a
-      # pull request shows it still works; publish attests it against the packages it uploads.
+      # pull request shows it still works; publish attests it against the packages it uploads. x64's is
+      # app-sbom's (below, hosted: this job may run on an ab-ci machine, which need not reach Trivy's download).
       - name: Install Trivy
+        if: matrix.runtime == 'win-arm64'
         uses: ./.github/actions/install-trivy
       - name: SBOM of the published app (CycloneDX)
+        if: matrix.runtime == 'win-arm64'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/sbom" | Out-Null
@@ -760,6 +793,7 @@ jobs:
           . ./build/app-notices.ps1
           Add-AppSbomLicences -Publish '${{ matrix.out }}/publish' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Sbom "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.runtime == 'win-arm64'
         with:
           name: sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}
           path: ${{ runner.temp }}/sbom
@@ -772,7 +806,7 @@ jobs:
           Write-Output "::error title=app (win-arm64)::the self-test failed on both attempts (#2026); the package, installer input and SBOM above are uploaded"
           exit 1
       - name: Stage named self-test text, never WER dumps or archives
-        if: always()
+        if: always() && matrix.runtime == 'win-arm64'
         id: selftest-text
         shell: pwsh
         run: |
@@ -811,6 +845,63 @@ jobs:
             ${{ runner.temp }}/public-selftest/app.log
             ${{ runner.temp }}/public-selftest/app-crash-analysis.txt
           retention-days: 7
+      # Last, so a reused ab-ci machine keeps no build server of this job's (CachePolicy; ab-ci-smoke.yml does the same).
+      - name: Stop this job's build servers
+        if: always()
+        run: dotnet build-server shutdown
+
+  # The x64 package's SBOM, off the app job (#4104): that job may run on an ab-ci machine, which need not reach the Trivy
+  # download. Hosted, from the publish folder app uploaded, under the same artifact name as before, so publish and attest
+  # read sbom-win-x64-<version> unchanged.
+  app-sbom:
+    name: app-sbom (win-x64)
+    needs: [plan, app]
+    if: "!cancelled() && (needs.plan.outputs.app-sbom == 'true')"
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The publish folder app packed
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-bridge-windows-publish-${{ env.APP_VERSION }}
+          path: out/app/publish
+      - name: Install Trivy
+        uses: ./.github/actions/install-trivy
+      - name: SBOM of the published app (CycloneDX)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/sbom" | Out-Null
+          trivy fs --format cyclonedx --output "$env:RUNNER_TEMP/sbom/agent-bridge-windows-win-x64-$env:APP_VERSION.cdx.json" out/app/publish
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          . ./build/app-notices.ps1
+          Add-AppSbomLicences -Publish out/app/publish -Version $env:APP_VERSION -Runtime win-x64 -Sbom "$env:RUNNER_TEMP/sbom/agent-bridge-windows-win-x64-$env:APP_VERSION.cdx.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-win-x64-${{ env.APP_VERSION }}
+          path: ${{ runner.temp }}/sbom
+          if-no-files-found: error
+          retention-days: 30
+
+  # The x64 desktop self-test, off the app job (#4104): it draws windows, so it needs a desktop, which the ab-ci services
+  # have none of. Hosted, from the publish folder app uploaded: the bytes that were packed are the bytes tested. A pull
+  # request runs it only when the plan says the app's own files changed (app-package's triggers, quality/catalog.yml);
+  # main runs it here when selected too and, always, in full.yml (the FULL lane, which the train reads).
+  app-self-test:
+    name: app-self-test (win-x64)
+    needs: [plan, app]
+    if: "!cancelled() && (needs.plan.outputs.app-self-test == 'true')"
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/app-self-test
+        with:
+          artifact: agent-bridge-windows-publish-${{ env.APP_VERSION }}
 
   app-installer:
     # Reuse app's tested unsigned pack, never a second build or a different run (#1766).
@@ -1539,7 +1630,7 @@ jobs:
     # new gate's check only once every job it needs is done; under the same name, the draft's
     # green gate would stand for the whole head until then, and a merge could go through on it.
     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
-    needs: [plan, product, ha-integration, app, app-installer, light]
+    needs: [plan, product, ha-integration, app, app-installer, app-sbom, app-self-test, light]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1630,7 +1721,7 @@ jobs:
             (.plan.outputs // {}) as $plan
             | ($plan["whole-ring"] == "true") as $all
             | ($off | split(" ")) as $off
-            | [to_entries[] | select(.key == "plan" or ($all and .key != "app" and .key != "app-installer") or $plan[.key] == "true")
+            | [to_entries[] | select(.key == "plan" or ($all and (.key | IN("app", "app-installer", "app-sbom", "app-self-test") | not)) or $plan[.key] == "true")
                 | select(.key | IN($off[]) | not)
                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
             | join(", ")')

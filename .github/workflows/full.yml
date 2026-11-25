@@ -5,7 +5,8 @@ name: Full
 # merge_group or push trigger (quality/catalog.yml `lane: full`, and the catalog check enforces it). It runs after a push to main
 # whose FAST run finished green (a workflow_run of CI), or by hand for a commit (the release train dispatches it for one it wants
 # to publish). Every job tests the commit the FAST run passed on, never the branch tip. A newer push cancels an older run: the
-# latest wins. The spikes, pwa-e2e and pwa-ui are here (pieces 4, 5b and 5c); the app's self-test, pack and installers follow (piece 6).
+# latest wins. The spikes, pwa-e2e and pwa-ui are here (pieces 4, 5b and 5c), and the x64 app self-test (piece 6, first part, run on the
+# FAST run's publish folder); the pack and installers follow.
 on:
   # Unlike main-red, this checks out the triggering run's commit: only main's own pushed commit, since the trigger job passes only for
   # a green push run on main (branches: [main] and the event and branch tests below), never a pull request's or a fork's code.
@@ -36,6 +37,9 @@ jobs:
       contents: read
     outputs:
       tested: ${{ steps.commit.outputs.tested }}
+      # The FAST run that passed on that commit: its id, and its number, which is the app's version (0.1.<number>), never this run's.
+      ci-run-id: ${{ steps.commit.outputs.ci-run-id }}
+      ci-run-number: ${{ steps.commit.outputs.ci-run-number }}
       ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
     steps:
       # The commit every other job checks out, and the only place a commit is decided. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
@@ -53,14 +57,21 @@ jobs:
           fail() { echo "::error title=full.yml::$1"; exit 1; }
           if [ "$EVENT" = workflow_run ]; then
             [[ "$RUN_ID" =~ ^[0-9]+$ ]] || fail "the CI run has no number"
-            run=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '[.head_sha, .head_branch, .event] | @tsv') || fail "couldn't read the CI run"
-            IFS=$'\t' read -r sha branch event <<< "$run"
+            run=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '[.head_sha, .head_branch, .event, .run_number] | @tsv') || fail "couldn't read the CI run"
+            IFS=$'\t' read -r sha branch event number <<< "$run"
             [ "$branch" = main ] && [ "$event" = push ] || fail "the CI run is not a push to main"
+            ci_id=$RUN_ID
           else
+            # By hand: the newest green push run of CI on this commit, whose packages the app jobs test. None is a failure, not a pass.
             sha=$REF_SHA
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "the commit under test is not 40 lowercase hex characters"
+            run=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$sha&branch=main&event=push&status=success&per_page=1" --jq '.workflow_runs[0] // empty | [.id, .run_number] | @tsv') || fail "couldn't list CI's runs"
+            [ -n "$run" ] || fail "no green push run of CI on main for $sha, so there is nothing to test"
+            IFS=$'\t' read -r ci_id number <<< "$run"
           fi
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "the commit under test is not 40 lowercase hex characters"
-          echo "tested=$sha" >> "$GITHUB_OUTPUT"
+          [[ "$ci_id" =~ ^[0-9]+$ && "$number" =~ ^[0-9]+$ ]] || fail "the CI run's id or number isn't a number"
+          { echo "ci-run-id=$ci_id"; echo "ci-run-number=$number"; echo "tested=$sha"; } >> "$GITHUB_OUTPUT"
           echo "FULL lane for commit $sha" >> "$GITHUB_STEP_SUMMARY"
 
   spikes:
@@ -375,11 +386,56 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  app-self-test:
+    # The display name is the one the release train already requires of FULL (build/select-release-commit.ps1 FullRequiredJobs).
+    name: app-selftest (win-x64)
+    # The x64 app's desktop self-test on every main commit, hosted (it needs a desktop; the ab-ci runners have none, #4104). It tests the
+    # publish folder the FAST run's app (win-x64) job packed and uploaded, never a rebuild, so the bytes tested are the bytes packed, and
+    # the version is that run's (0.1.<its number>). A pull request that touched the app has run it already in ci.yml (app-self-test).
+    needs: trigger
+    if: needs.trigger.outputs.ok == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read # the FAST run's artifacts and jobs
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.trigger.outputs.tested }}
+          persist-credentials: false
+      # A FAST run whose plan built no app (docs only, say) has no publish folder: nothing to test, and not a failure. A FAST run that did
+      # build it but whose folder is gone (past 7 days, by hand) is one.
+      - name: The FAST run's publish folder
+        id: fast
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CI_RUN_ID: ${{ needs.trigger.outputs.ci-run-id }}
+          CI_RUN_NUMBER: ${{ needs.trigger.outputs.ci-run-number }}
+        run: |
+          if ($env:CI_RUN_ID -notmatch '^\d+$' -or $env:CI_RUN_NUMBER -notmatch '^\d+$') { Write-Host '::error::the trigger gave no FAST run'; exit 1 }
+          $name = "agent-bridge-windows-publish-0.1.$env:CI_RUN_NUMBER"
+          $have = gh api "repos/$env:REPO/actions/runs/$env:CI_RUN_ID/artifacts?name=$name" --jq '[.artifacts[] | select(.expired == false)] | length'
+          if ($LASTEXITCODE) { Write-Host '::error::could not list the FAST run''s artifacts'; exit 1 }
+          if ([int]$have -gt 0) { "have=true" | Add-Content $env:GITHUB_OUTPUT; "artifact=$name" | Add-Content $env:GITHUB_OUTPUT; exit 0 }
+          $built = gh api "repos/$env:REPO/actions/runs/$env:CI_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select(.name == "app (win-x64)" and .conclusion == "success")] | length'
+          if ($LASTEXITCODE) { Write-Host '::error::could not read the FAST run''s jobs'; exit 1 }
+          if ([int]$built -gt 0) { Write-Host "::error::the FAST run $env:CI_RUN_ID built the x64 app but $name is gone"; exit 1 }
+          "have=false" | Add-Content $env:GITHUB_OUTPUT
+          "The FAST run $env:CI_RUN_ID built no x64 app, so there is nothing to self-test." | Add-Content $env:GITHUB_STEP_SUMMARY
+      - if: steps.fast.outputs.have == 'true'
+        uses: ./.github/actions/app-self-test
+        with:
+          artifact: ${{ steps.fast.outputs.artifact }}
+          run-id: ${{ needs.trigger.outputs.ci-run-id }}
+
   full-gate:
     # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
     # job, runs whatever they did, and fails when any ended other than success, a skipped one included, so a FULL run whose lane
     # did not run is no pass. It passes only when the FAST run was not a green push to main, and then says there was nothing to test.
-    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui]
+    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui, app-self-test]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

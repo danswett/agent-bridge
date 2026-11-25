@@ -1,0 +1,68 @@
+name: x64 app self-test
+description: >
+  Runs the published x64 app's desktop self-test (build/app-self-test.ps1) from the publish folder the app job packed and
+  uploaded, so the bytes tested are the bytes packed, and uploads the named diagnostics. Used by ci.yml's app-self-test and
+  full.yml's. Hosted Windows only: the app draws windows and needs a desktop (#4104). The caller has already checked out.
+inputs:
+  artifact:
+    description: The publish folder's artifact name (agent-bridge-windows-publish-<version>)
+    required: true
+  run-id:
+    description: The run that uploaded it; the current run when empty (full.yml names the FAST run)
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: The publish folder app packed
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.artifact }}
+        path: out/app/publish
+        run-id: ${{ inputs.run-id || github.run_id }}
+        github-token: ${{ github.token }}
+    - name: The published app draws the demo's cards and answers one
+      shell: pwsh
+      # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
+      run: ./build/app-self-test.ps1 -Exe out/app/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 720
+    - name: Stage named self-test text, never WER dumps or archives
+      if: always()
+      id: text
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $source = Join-Path $env:RUNNER_TEMP 'selftest'
+        $out = Join-Path $env:RUNNER_TEMP 'public-selftest'
+        New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+        $utf8 = [Text.UTF8Encoding]::new($false, $true)
+        function Read-DiagnosticText([string]$path) {
+          $file = Get-Item -LiteralPath $path
+          for ($item = $file.Directory; $null -ne $item; $item = $item.Parent) {
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic directory refused' }
+          }
+          if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic input refused' }
+          $text = $utf8.GetString([IO.File]::ReadAllBytes($file.FullName)).TrimStart([char]0xFEFF)
+          if ($text -match '[\x00-\x08\x0B\x0C\x0E-\x1F]' -or $text -match '^(MDMP|PAGEDUMP|PAGEDU64|PK\x03\x04|\x7FELF)') {
+            throw 'Binary diagnostic input refused'
+          }
+          return $text
+        }
+        foreach ($name in 'result.json', 'app-exit-cause.json', 'app.stderr.log', 'app.log', 'app-crash-analysis.txt') {
+          $path = Join-Path $source $name
+          if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+          $text = Read-DiagnosticText $path
+          if ($name.EndsWith('.json')) { $null = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+          [IO.File]::WriteAllText((Join-Path $out $name), $text, $utf8)
+        }
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: always() && steps.text.outcome == 'success'
+      with:
+        name: app-self-test-win-x64
+        path: |
+          ${{ runner.temp }}/public-selftest/result.json
+          ${{ runner.temp }}/public-selftest/app-exit-cause.json
+          ${{ runner.temp }}/public-selftest/app.stderr.log
+          ${{ runner.temp }}/public-selftest/app.log
+          ${{ runner.temp }}/public-selftest/app-crash-analysis.txt
+        retention-days: 7
