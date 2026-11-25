@@ -238,7 +238,8 @@ public sealed class DeliveryDispatchPumpTests
         var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), _ => { }) { StopHeld = f.Pump.BeginStop };
         var lease = await stops.PrepareStopAsync();
         Assert.NotNull(lease);
-        // Released, as a stop the host then abandoned would be: the pump must not wake again.
+        // Released without the host exiting, as a stop the host then abandoned would be (the update apply or the restart handover throws):
+        // BeginStop cannot be undone, so the pump stays stopped until the host restarts. That limit is in docs/message-delivery.md (#4519).
         lease.Dispose();
         f.Offer(); await f.Pump.WhenIdleAsync();
         Assert.Single(f.Sent);
@@ -264,6 +265,21 @@ public sealed class DeliveryDispatchPumpTests
         var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), _ => { }) { StopHeld = () => order.Add("pump") };
         Assert.True(stops.TryCommitRestart(stops.RestartToken(), () => order.Add("handover")));
         Assert.Equal(["pump", "handover"], order);
-        await Task.CompletedTask;
+    }
+
+    // Program's top-level code cannot be called from a test, so this pins the S6 wiring itself (#4519): the hook is set after the composition
+    // exists, and the pump is declared after the composition so it is disposed first when the host run ends.
+    [Fact]
+    public void The_host_sets_the_stop_hook_after_building_the_lane_and_disposes_the_pump_before_the_composition()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent ?? throw new IOException("repository root not found"); }
+        var program = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "Program.cs")).ReplaceLineEndings("\n");
+        int At(string text) { var i = program.IndexOf(text, StringComparison.Ordinal); Assert.True(i >= 0, text); Assert.Equal(i, program.LastIndexOf(text, StringComparison.Ordinal)); return i; }
+        var created = At("LiteComposition.Create(");
+        var hook = At("plannedStops.StopHeld = () => liteDeliver.Pump?.BeginStop();");
+        var composition = At("using var laneComposition = liteDeliver.Composition;");
+        var pump = At("await using var lanePump = liteDeliver.Pump;");
+        Assert.True(created < hook && hook < composition && composition < pump);
     }
 }
