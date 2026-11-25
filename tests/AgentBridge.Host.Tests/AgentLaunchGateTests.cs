@@ -33,7 +33,8 @@ public sealed class AgentLaunchGateTests : IDisposable
         Assert.Equal("rate-limited", refusal.Reason);
         Assert.InRange(refusal.RetryAfterSeconds, 1, 3600);
         var row = JsonSerializer.Deserialize<JsonElement>(Assert.Single(File.ReadAllLines(
-            Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl"))).Skip(1)));
+            Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl"))).Skip(1),
+            raw => JsonSerializer.Deserialize<JsonElement>(raw).GetProperty("outcome").GetString() == "refused"));
         Assert.Equal(principal, row.GetProperty("principal").GetString());
         Assert.Equal(request, row.GetProperty("request").GetString());
         Assert.Equal("refused", row.GetProperty("outcome").GetString());
@@ -48,7 +49,8 @@ public sealed class AgentLaunchGateTests : IDisposable
         var gate = new AgentLaunchGate(folder, () => clock.GetUtcNow(), clock);
         for (var i = 0; i < 3; i++) { Assert.True(gate.CheckLaunch("agent:machine/parent", Guid.NewGuid().ToString("D"), "hash").Allowed); }
         void Refused() => Assert.Equal("rate-limited", gate.CheckLaunch("agent:machine/parent", Guid.NewGuid().ToString("D"), "hash").Reason);
-        string[] Rows() => File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl"))).Skip(1).ToArray();
+        string[] Rows() => File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl")))
+            .Skip(1).Where(raw => JsonSerializer.Deserialize<JsonElement>(raw).GetProperty("outcome").GetString() == "refused").ToArray();
 
         for (var i = 0; i < 100; i++) { Refused(); }
 
