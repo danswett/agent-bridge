@@ -112,7 +112,9 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
     {
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(folder, FileName)));
+            // A property twice (two win/prerelease floors) is malformed, as the policy body's parser treats it: a JsonException here, so a new
+            // installation below, not the ArgumentException ToDictionary would throw out of every later check (#3701).
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(folder, FileName)), new JsonDocumentOptions { AllowDuplicateProperties = false });
             var root = doc.RootElement;
             var body = root.GetProperty("body").GetBytesFromBase64();
             return new(body.Length == 0 ? null : HaltPolicyReader.Parse(body), root.GetProperty("seen").GetDateTimeOffset(),

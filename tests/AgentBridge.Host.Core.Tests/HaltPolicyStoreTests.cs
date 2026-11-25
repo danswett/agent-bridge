@@ -268,6 +268,27 @@ public sealed class HaltPolicyStoreTests : IDisposable
         Assert.Equal(7310, (await Store().CheckAsync(Policy(40, run: 7400), null)).Floors["win/prerelease"]);
     }
 
+    // #3701: a state file with the same property twice (two win/prerelease floors) made ToDictionary throw ArgumentException, which Load did not
+    // catch, so every later check threw. It is malformed state like any other: a new installation, never a pass and never a throw, the way the policy
+    // body's parser rejects a duplicate property.
+    [Theory]
+    [InlineData("\"floors\":{", "\"floors\":{\"win/prerelease\":1,")]
+    [InlineData("\"contradicted\":false", "\"contradicted\":false,\"contradicted\":false")]
+    [InlineData("\"halts\":[", "\"halts\":[],\"halts\":[")]
+    public async Task A_state_file_with_a_duplicate_property_is_a_new_install_never_a_throw_or_a_pass(string find, string duplicated)
+    {
+        Assert.Equal(Verified, await Outcome(Policy(42), "0.1.7300"));
+        var path = Path.Combine(folder, HaltPolicyStore.FileName);
+        var text = File.ReadAllText(path);
+        Assert.Contains(find, text, StringComparison.Ordinal);
+        File.WriteAllText(path, text.Replace(find, duplicated, StringComparison.Ordinal));
+
+        var verdict = await Store().CheckAsync(null, "0.1.7300");
+
+        Assert.Equal((Unavailable, null), (verdict.Outcome, verdict.Policy));
+        Assert.Equal(Verified, await Outcome(Policy(41), "0.1.7300"));
+    }
+
     [Fact]
     public async Task Unreadable_state_is_a_new_install_never_a_pass()
     {
