@@ -25,6 +25,18 @@ says how to regenerate them.
 | Not while another profile's app or host runs from the same installation | Velopack stops every process in the package, busy or not, and restarts only the profile that installed. The app refuses at once, before anything is downloaded, and again just before it stops the host |
 | Not when the app is not running, or cannot update (a build folder rather than an installed copy) | Nothing would carry it out |
 
+**The update-only run (owner-approved CHANGE, Nov 23, #2869).** The app also starts as `AgentBridge.exe
+--update-only --profile <name>`, which the host uses on a machine whose app is closed (design G2's cold
+activation, headless). It shows nothing: no window, tray icon, toast, first-run guide or sign-in entry. It
+installs as "Install between turns" does, whatever the person chose for "When an update is ready" and for
+"Download updates automatically" (their file keeps those two choices as they were), with the same
+refusals and the same wait for a gap between turns; the person's release notes are said by the next start
+they see. It ends when a check finds nothing newer, when the copy cannot update, once the update is applied
+(the app restarted after it is an update-only run too, which starts the host and ends), or after the
+backstop and a quarter of an hour, so the host can start another for a later release. It adds no way in: it
+is started on the machine by the host's own user, and a press from another device still takes the rules
+above. Part 1 of this change is the app mode; the host starting it, and its setting, follow.
+
 Set to "Restart to update" (the default), the app never installs a release by itself (#516): it
 downloads it in the background ("Download updates automatically") and waits for a person, Restart
 to update at the machine or Install here. Set to "Install between turns" (#689, a machine agents
