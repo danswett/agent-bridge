@@ -31,6 +31,7 @@ export function refusalText(reason, name = 'this machine') {
 }
 
 const MISSING = ['notRecorded', 'notStarted', 'notConfigured', 'invalid', 'failed'];
+const RESTART_CAUSE = ['app', 'device', 'watchdog'];
 const READ_ONLY = ['none', 'configReadOnly', 'configProblem', 'agentHaBridge', 'other'];
 const RELAY = ['off', 'signedOut', 'connecting', 'connected', 'refused'];
 const CHECK = ['missing', 'needsAction', 'working', 'blocked', 'failed'];
@@ -156,7 +157,8 @@ export function readDiagnostics(raw) {
         version: version(hostVersion), dev: bool(host.dev), startedAt: at(host.startedAt), uptimeSeconds: count(int(host.uptimeSeconds)),
         versionMissing: hostVersion !== null && version(hostVersion) === null ? 'invalid' : maybe(MISSING, host.versionMissing),
       },
-      lastRestart: { at: atOrNull(restart, 'at'), causeMissing: (need(has(restart, 'causeMissing')), maybe(MISSING, restart.causeMissing)) },
+      // cause is read when present: a host before #1964 leaves it out.
+      lastRestart: { at: atOrNull(restart, 'at'), causeMissing: (need(has(restart, 'causeMissing')), maybe(MISSING, restart.causeMissing)), cause: maybe(RESTART_CAUSE, restart.cause) },
       relay: { state: code(RELAY, relay.state), since: atOrNull(relay, 'since'), missing: maybe(MISSING, relay.missing) },
       holds: {
         // null, as discoveryHeld, when it is not known: never read as none, which only [] says.
@@ -213,7 +215,7 @@ export function diagnosticsText(d, name = 'this machine') {
   const lines = [
     `${BRAND.name} diagnostics \u00B7 ${name} \u00B7 ${pacific(d.at)}`,
     `host: ${or(d.host.version, d.host.versionMissing)}${d.host.dev ? ' (dev)' : ''}, started ${pacific(d.host.startedAt)}, up ${d.host.uptimeSeconds}s`,
-    `last restart: ${when(d.lastRestart.at, 'notRecorded')}, cause ${d.lastRestart.causeMissing ? `unavailable (${d.lastRestart.causeMissing})` : 'unknown'}`,
+    `last restart: ${when(d.lastRestart.at, 'notRecorded')}, cause ${d.lastRestart.cause ?? (d.lastRestart.causeMissing ? `unavailable (${d.lastRestart.causeMissing})` : 'unknown')}`,
     `relay: ${d.relay.missing ? `unavailable (${d.relay.missing})` : d.relay.state}${d.relay.since ? ` since ${pacific(d.relay.since)}` : ''}`,
     `read-only: ${d.holds.readOnlyMissing ? `unavailable (${d.holds.readOnlyMissing})` : or(d.holds.readOnly, null)}`,
     `discovery held: ${d.holds.discoveryMissing ? `unavailable (${d.holds.discoveryMissing})` : d.holds.discoveryHeld === null ? or(null, null) : heldText(d.holds)}`,

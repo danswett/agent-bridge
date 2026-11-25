@@ -736,15 +736,18 @@ async Task<int> ServeAsync(HostHandover handover)
     // Remote management hears of the handover (bound below, once it exists), so a remote restart a stop
     // won over is not reported done by the next host.
     Action? handingOver = null;
+    // Why this host would leave for a restart, written for the next one at the point it commits (#1964).
+    var restartCause = DiagnosticsRestartCause.App;
     var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct),
-        () => { handingOver?.Invoke(); handover.Request(); }, stop.Cancel, stop.Token,
+        () => { RestartMarker.Write(identity.Folder, restartCause, TimeProvider.System.GetUtcNow()); handingOver?.Invoke(); handover.Request(); }, stop.Cancel, stop.Token,
         ct => deliveryGate.PrepareStopAsync(TimeSpan.FromSeconds(15), ct), plannedStops.TryCommitRestart);
-    void RestartHost()
+    void RestartHost(DiagnosticsRestartCause cause = DiagnosticsRestartCause.App)
     {
+        restartCause = cause;
         var interrupted = plannedStops.RestartToken();
         _ = Task.Run(() => restart.RunAsync(interrupted));
     }
-    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
+    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, () => RestartHost(DiagnosticsRestartCause.Watchdog), () => stop.IsCancellationRequested));
     // Restart from a person's device through the relay (#801, docs/protocol/v1-sessions.md, "Managing
     // a machine"), every planned departure through one quiet lease (#805). ServeReadOnly is the
     // acting answer (G5's Active). Update now (#1159) leaves through the same lease, its Update
@@ -753,7 +756,7 @@ async Task<int> ServeAsync(HostHandover handover)
         () =>
         {
             Log("restarting: asked by a person's device through the relay");
-            RestartHost();
+            RestartHost(DiagnosticsRestartCause.Device);
         },
         push, name, Log, watchdog: departureWatchdog, otherHosts: OperatingSystem.IsWindows() ? HostUpdateGate.OtherHosts : null);
     var (manage, lifecycle) = (composed.Manage, composed.Lifecycle);
@@ -993,11 +996,11 @@ async Task<int> ServeAsync(HostHandover handover)
         }),
         Stop = () => stop.Cancel(),
         PrepareStop = PrepareStop,
-        Restart = RestartHost,
+        Restart = () => RestartHost(),
         HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
             ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
     }, Log);
-    diagnostics.Bind(() => control.RelayNow, () => agentReadiness.Snapshot, control.StartedAt);
+    diagnostics.Bind(() => control.RelayNow, () => agentReadiness.Snapshot, control.StartedAt, RestartMarker.Consume(identity.Folder, TimeProvider.System.GetUtcNow()));
     agentReadiness.Start();
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }

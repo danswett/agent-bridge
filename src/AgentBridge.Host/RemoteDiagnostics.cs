@@ -22,7 +22,7 @@ namespace AgentBridge.Host;
 // re-read through JournalCodec, so nothing outside that closed form is sent.
 public sealed class RemoteDiagnostics
 {
-    sealed record Sources(Func<RelayStatus> Relay, Func<AgentReadinessReport?> Readiness, DateTimeOffset StartedAt);
+    sealed record Sources(Func<RelayStatus> Relay, Func<AgentReadinessReport?> Readiness, DateTimeOffset StartedAt, DiagnosticsRestartCause? RestartCause);
 
     public const string Refusal = DiagnosticsProtocol.Refused;
     public const string TooSoon = DiagnosticsProtocol.TooSoon;
@@ -56,8 +56,8 @@ public sealed class RemoteDiagnostics
     }
 
     // The host's status sources come up after the sessions service that serves this.
-    public void Bind(Func<RelayStatus> relay, Func<AgentReadinessReport?> readiness, DateTimeOffset startedAt) =>
-        Volatile.Write(ref sources, new Sources(relay, readiness, startedAt));
+    public void Bind(Func<RelayStatus> relay, Func<AgentReadinessReport?> readiness, DateTimeOffset startedAt, DiagnosticsRestartCause? restartCause = null) =>
+        Volatile.Write(ref sources, new Sources(relay, readiness, startedAt, restartCause));
 
     public bool Offered(IProtocolChannel channel) => channel is SecureChannel secure && person(secure);
 
@@ -145,7 +145,7 @@ public sealed class RemoteDiagnostics
         var bound = Volatile.Read(ref sources);
         var (part, failure) = await JournalAsync(Math.Clamp(maxEntries, 1, DiagnosticsProtocol.MaxEntries), cancellationToken).ConfigureAwait(false);
         var snapshot = new DiagnosticsSnapshot(DiagnosticsProtocol.Schema, now, Host(bound, now),
-            new DiagnosticsRestart(bound?.StartedAt, DiagnosticsMissing.NotRecorded),
+            new DiagnosticsRestart(bound?.StartedAt, bound?.RestartCause is null ? DiagnosticsMissing.NotRecorded : null, bound?.RestartCause),
             Relay(bound), Holds(), Readiness(bound), part);
         return (Fit(snapshot), failure);
     }
