@@ -1968,15 +1968,20 @@ public class MergeRuleTests
     [Fact]
     public void A_run_passed_over_for_a_parent_still_running_leaves_the_next_run_nothing_completed_to_read_again()
     {
-        var runs = MainRunsAged(MainNow, (109, "completed", "success", 1, 5), (108, "completed", "success", 1, 10), (107, "in_progress", null, 1, 25), (106, "completed", "success", 1, 90));
         // Three-digit ids: Sha pads "c<id>" with zeros, so Sha(1) and Sha(10) would be the same sha.
-        var (posted, reads) = RelianceReads(runs, (109, Relies(108)), (108, Relies(107)), (107, RelyNone), (106, RelyNone));
+        var runs = MainRunsAged(MainNow, (110, "completed", "success", 1, 5), (109, "completed", "success", 1, 10), (108, "completed", "success", 1, 15),
+            (107, "in_progress", null, 1, 25), (106, "completed", "success", 1, 90));
+
+        var (posted, reads) = RelianceReads(runs, (110, Relies(109)), (109, Relies(108)), (108, Relies(107)), (107, RelyNone), (106, RelyNone));
 
         Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
-        var twice = reads.GroupBy(p => p, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key)
-            .Where(p => !p.Contains("/actions/runs/107/", StringComparison.Ordinal) && !p.Contains($"head_sha={Sha(107)}", StringComparison.Ordinal)
-                && !p.Contains("per_page=20&page=", StringComparison.Ordinal)).ToList();
+        bool Running(string p) => p.Contains("/actions/runs/107/", StringComparison.Ordinal) || p.Contains($"head_sha={Sha(107)}", StringComparison.Ordinal)
+            || p.Contains("per_page=20&page=", StringComparison.Ordinal);
+        var twice = reads.GroupBy(p => p, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).Where(p => !Running(p)).ToList();
         Assert.True(twice.Count == 0, $"read more than once in one evaluation: {string.Join(", ", twice)}");
+        // ...and what can still change is read again by each walk.
+        Assert.True(reads.Count(p => p.EndsWith($"head_sha={Sha(107)}", StringComparison.Ordinal)) > 1, "the running parent's lookup was kept");
+        Assert.True(reads.Count(p => p.Contains("per_page=20&page=1", StringComparison.Ordinal)) > 1, "a page that lists a running run was kept");
     }
 
     // A read that failed is not kept: the next walk reads the run again, as it always has. A run 7 whose first read throws (fresh, so never skipped)
@@ -1994,13 +1999,16 @@ public class MergeRuleTests
         Assert.True(posted.Contains(" success merge-rule ", StringComparison.Ordinal), posted);
     }
 
-    // A parent seen running is read again: it can finish between two walks, and a failure it ends in keeps main red.
-    [Fact]
-    public void A_parent_seen_running_that_then_fails_keeps_main_red_not_passed_over_for_an_older_run()
+    // A parent seen running is read again: it can finish between two walks. A failure it ends in keeps main red, not passed over for an older run;
+    // a pass it ends in is a pass (its job list, read while it was going, is not what the next walk sees).
+    [Theory]
+    [InlineData("failure", " failure merge-rule ")]
+    [InlineData("success", " success merge-rule ")]
+    public void A_parent_seen_running_that_then_finishes_is_judged_as_it_finished(string conclusion, string expected)
     {
         var running = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
-        var failed = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 25), (6, "completed", "success", 1, 90));
-        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: running, changeAfterLookup: (Sha(7), failed),
+        var finished = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 20), (7, "completed", conclusion, 1, 25), (6, "completed", "success", 1, 90));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: running, changeAfterLookup: (Sha(7), finished),
             planRecords: new Dictionary<long, string> { [9] = Relies(8), [8] = Relies(7), [7] = RelyNone, [6] = RelyNone });
         var config = WriteConfig();
         try
@@ -2008,7 +2016,7 @@ public class MergeRuleTests
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain, utcNow: () => MainNow);
 
             var posted = Assert.Single(github.Posted);
-            Assert.True(posted.Contains(" failure merge-rule ", StringComparison.Ordinal), posted);
+            Assert.True(posted.Contains(expected, StringComparison.Ordinal), posted);
         }
         finally
         {
