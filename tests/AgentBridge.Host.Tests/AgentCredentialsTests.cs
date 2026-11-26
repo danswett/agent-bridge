@@ -155,8 +155,8 @@ public sealed class AgentCredentialsTests : IDisposable
         var store = Store();
         var token = store.Prepare("", "launch-1")!;
         store.Bind("launch-1", 100, Started);
-        store.Resolve("launch-1", "sess-a");
-        store.Resolve("launch-1", "sess-b");
+        Assert.True(store.Resolve("launch-1", "sess-a"));
+        Assert.False(store.Resolve("launch-1", "sess-b"));
         Assert.Equal("sess-a", store.Check(token, Inside()).Accepted!.Session);
         Assert.Null(store.Check(token, Inside(rootPid: 101)).Accepted);
         Assert.Null(store.Check(token, Inside(started: Started.AddHours(3))).Accepted);
@@ -170,7 +170,7 @@ public sealed class AgentCredentialsTests : IDisposable
         var held = store.Mint("sess-9", "adopted", 200, Started, AgentProtocol.ScopeRead);
         var token = store.Prepare("", "launch-1")!;
         store.Bind("launch-1", 100, Started);
-        store.Resolve("launch-1", "sess-9");
+        Assert.False(store.Resolve("launch-1", "sess-9"));
         Assert.Null(store.Check(token, Inside()).Accepted);
         Assert.Equal(1, store.Count);
         Assert.Equal("sess-9", store.Check(held, Inside(rootPid: 200)).Accepted!.Session);
@@ -185,8 +185,8 @@ public sealed class AgentCredentialsTests : IDisposable
         var store = Store();
         var token = store.Prepare("", "launch-1")!;
         store.Bind("launch-1", 100, Started);
-        store.Resolve("launch-1", session);
-        store.Resolve("unknown-launch", "sess-a");
+        Assert.False(store.Resolve("launch-1", session));
+        Assert.False(store.Resolve("unknown-launch", "sess-a"));
         Assert.Null(store.Check(token, Inside()).Accepted);
         Assert.Null(Store().Problem);
     }

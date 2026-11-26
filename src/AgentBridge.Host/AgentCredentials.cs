@@ -383,24 +383,25 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // Gives a launch's credential the session the host has proved it started (#3644). Only an unresolved one, once: a resolved credential is
     // never pointed at another session. A session another credential already holds (a person adopted it first) is never taken: the unresolved
     // one is dropped instead, and the other is left as it was.
-    public void Resolve(string launchId, string session)
+    public bool Resolve(string launchId, string session)
     {
         lock (gate)
         {
             var i = records.FindIndex(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && r.Credential.Unresolved);
-            if (i < 0 || !ValidSession(session)) { return; }
+            if (i < 0 || !ValidSession(session)) { return false; }
             var credential = records[i].Credential;
-            if (credential.RootPid <= 0 || !rootAlive(credential.RootPid, credential.RootStartUtc)) { return; }
+            if (credential.RootPid <= 0 || !rootAlive(credential.RootPid, credential.RootStartUtc)) { return false; }
             if (records.Any(r => r.Credential.Session == session))
             {
                 Remove(r => r.Credential.Id == credential.Id, $"session {session} already holds a credential");
-                return;
+                return false;
             }
             records[i] = records[i] with { Credential = credential with { Session = session } };
             try { Save(); }
             catch (IOException e) { Fault($"could not save: {e.Message}"); }
             catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
             log($"agent credentials: credential {credential.Id} now answers for session {session}");
+            return true;
         }
     }
 

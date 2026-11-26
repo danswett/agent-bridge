@@ -1361,7 +1361,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
             }
             // A session whose id the agent chooses (Codex) has none yet: its credential is issued unresolved, bound to the process, and
-            // takes the session's id when the process tree proves which session this launch started (Registered, #3644).
+            // takes the session's id only when proof says which session this launch started (Registered, #3644).
             var credentialIssued = false;
             if (credentials is not null)
             {
@@ -1604,7 +1604,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             {
                 try { credentials!.Abandon(open); }
                 catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException) { log($"launch {Short(p.Key)}: the agent credential could not be given up: {e.GetType().Name}"); }
-                log($"launch {Short(p.Key)}: {label} gets no agent credential: its session was not proved to be this launch's by its process");
+                log($"launch {Short(p.Key)}: {label} gets no agent credential: no session proved to be this launch's took it");
             }
             if (p.Reservation is { } token && p.Worktree is { } worktree)
             {
@@ -1643,18 +1643,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 launchedOn[s.Id] = p.Started;
                 p.Bound = s.Id;
             }
-            // Only the process tree proves whose session it is; a timing guess must never give a credential someone else's identity.
-            if (own == true) { ResolveCredential(p, s.Id); }
+            // Only proof says whose session it is: its proven process, never one matched by folder or timing, is the launch's or under it.
+            if (source.ProvenProcessOf(s.Id) is { } proven && starter.Owns(p.Started, proven.Id) == true) { ResolveCredential(p, s.Id); }
             return s.Id;
         }
         return null;
     }
 
-    // Once: the launch's credential answers for the session its process tree proved. Never throws into the follow.
+    // The launch's credential answers for the session proved. Left open unless it took it, so the follow's end gives it up.
     void ResolveCredential(Pending p, string session)
     {
-        if (Interlocked.Exchange(ref p.OpenCredential, null) is not { } launchId) { return; }
-        try { credentials!.Resolve(launchId, session); }
+        if (p.OpenCredential is not { } launchId) { return; }
+        try { if (credentials!.Resolve(launchId, session)) { p.OpenCredential = null; } }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
         {
             log($"launch {Short(p.Key)}: the agent credential could not be given its session: {e.GetType().Name}");

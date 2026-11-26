@@ -14,12 +14,14 @@ public sealed partial class LaunchFlowTests
 
     string LaunchIdOf(RecordedCredentials credentials) => credentials.Calls.Single(c => c.StartsWith("prepare ", StringComparison.Ordinal)).Split(' ')[^1];
 
-    [Fact]
-    public async Task A_Codex_launch_is_given_a_credential_before_it_starts_and_told_its_session_once_its_process_tree_proves_it()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_Codex_launch_is_given_a_credential_before_it_starts_and_gives_up_one_that_would_not_take_its_proved_session(bool takes)
     {
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
         starter.Registers = false;
-        var credentials = new RecordedCredentials();
+        var credentials = new RecordedCredentials { Resolves = takes };
         var launching = Launcher(Config(), credentials: credentials).LaunchAsync(CodexAsk(), "phone");
         await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
         starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId);
@@ -28,7 +30,36 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(LaunchOutcome.Started, result.Outcome);
         var launchId = LaunchIdOf(credentials);
         Assert.Equal("tok-" + launchId, Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]);
-        Assert.Equal([$"prepare  {launchId}", $"bind {launchId} {starter.Pids[0]}", $"resolve {launchId} {starter.CodexId}"], credentials.Calls);
+        if (!takes) { await WaitAsync(() => Task.FromResult(credentials.Calls.Contains($"abandon {launchId}"))); }
+        string[] expected = [$"prepare  {launchId}", $"bind {launchId} {starter.Pids[0]}", $"resolve {launchId} {starter.CodexId}", $"abandon {launchId}"];
+        Assert.Equal(expected[..(takes ? 3 : 4)], credentials.Calls);
+    }
+
+    // A registration naming no process is matched to the launch by folder and time, which proves nothing: an IDE or exec thread
+    // there could write one first. The thread lock held under the launch (0.172's code-mode-host child) is proof.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Codex_registration_naming_no_process_resolves_the_credential_only_when_the_thread_lock_is_held_under_the_launch(bool locked)
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        var credentials = new RecordedCredentials();
+        var launcher = Launcher(Config(), credentials: credentials);
+        source.PendingCodexLaunches = launcher.PendingCodexLaunches;
+        var launching = launcher.LaunchAsync(CodexAsk(), "phone");
+        await WaitAsync(() => Task.FromResult(launcher.PendingCodexLaunches().Count == 1));
+        var offered = launcher.PendingCodexLaunches()[0];
+        if (locked) { (f.Processes.Holders[f.CodexLock(starter.CodexId)], f.Processes.Helpers[7002]) = ([7002], [offered.ProcessId]); }
+        f.Processes.Run(AgentKind.Codex, offered.ProcessId, "codex", offered.StartedAt);
+        f.CodexRegistration(starter.CodexId, 0, null, updated: DateTimeOffset.UtcNow, cwd: offered.Folder!);
+        var result = await launching;
+
+        Assert.Equal((LaunchOutcome.Started, starter.CodexId), (result.Outcome, result.Session));
+        var launchId = LaunchIdOf(credentials);
+        var last = locked ? $"resolve {launchId} {starter.CodexId}" : $"abandon {launchId}";
+        await WaitAsync(() => Task.FromResult(credentials.Calls.Contains(last)));
+        Assert.Equal([$"prepare  {launchId}", $"bind {launchId} {offered.ProcessId}", last], credentials.Calls);
     }
 
     [Fact]
@@ -40,8 +71,8 @@ public sealed partial class LaunchFlowTests
         var launching = Launcher(Config(), credentials: credentials).LaunchAsync(CodexAsk(), "phone");
         await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
         // The launcher has gone and the session's process is no child of it: only its timing says whose it is.
-        starter.Exit(starter.Pids[0]);
         starter.RegisterCodex(starter.Specs[0], 1, 7001, starter.CodexId);
+        starter.Exit(starter.Pids[0]);
         var result = await launching;
 
         Assert.Equal(LaunchOutcome.Started, result.Outcome);

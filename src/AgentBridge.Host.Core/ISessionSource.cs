@@ -108,6 +108,10 @@ public interface ISessionSource : IAsyncDisposable
     // tells it from a later process given the same id before the next discovery pass
     // notices. Null when the session has gone or the source cannot say.
     SessionProcess? ProcessOf(string id) => null;
+
+    // The same, only when it is proved: null for a process matched to the session by folder and time (a registration naming
+    // none, #3644) or remembered from before a restart. A source that cannot say has proved nothing.
+    SessionProcess? ProvenProcessOf(string id) => null;
 }
 
 public sealed record SessionProcess(int Id, DateTimeOffset? StartedAt);

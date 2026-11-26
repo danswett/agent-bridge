@@ -16,7 +16,9 @@ internal sealed record DiscoveredSession(
     Registration? Registration = null,
     // When that process started, if the OS would say: work a session began before it
     // belongs to a CLI that has gone, and can never finish.
-    DateTimeOffset? ProcessStartedAt = null);
+    DateTimeOffset? ProcessStartedAt = null,
+    // Something other than a guess ties it to that process: a hook registration naming it, or its thread lock held there.
+    bool Proven = false);
 
 // One agent-ha-bridge hook registration (<id>.json), as written by its Claude and Codex
 // hooks. Only read here: agent-ha-bridge prunes its own files, and on a machine migrated from
@@ -546,7 +548,7 @@ internal static class CodexLockDiscovery
             }
             else if (candidates[0].Transcript is { } t && CodexRollout.Thread(t, candidates[0].Id) == CodexThread.Other) { continue; }
             var (id, process, transcript) = candidates[0];
-            live.Add(new DiscoveredSession(id, AgentKind.Codex, transcript, null, process.Id, ProcessStartedAt: process.StartedAt));
+            live.Add(new DiscoveredSession(id, AgentKind.Codex, transcript, null, process.Id, ProcessStartedAt: process.StartedAt, Proven: true));
         }
         return live;
     }
@@ -813,7 +815,7 @@ internal static class RegistrationDiscovery
             // Claude creates its transcript at the first message, so a missing file is a
             // live session with nothing to show yet, not a dead one.
             var transcript = string.IsNullOrWhiteSpace(r.TranscriptPath) ? findTranscript(r.SessionId) : r.TranscriptPath;
-            live.Add(new DiscoveredSession(r.SessionId, agent, transcript, null, r.ProcessId, r, process.StartedAt));
+            live.Add(new DiscoveredSession(r.SessionId, agent, transcript, null, r.ProcessId, r, process.StartedAt, Proven: true));
         }
         return live;
     }

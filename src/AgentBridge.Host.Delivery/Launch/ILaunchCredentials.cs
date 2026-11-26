@@ -16,7 +16,7 @@ public interface ILaunchCredentials
     // The launch did not start, or (a Codex) never had its session proved: the token is dead.
     void Abandon(string launchId);
 
-    // A Codex launch's session is now known, proved by the process tree and never by timing: the
-    // token that was issued with no session now answers for it (#3644).
-    void Resolve(string launchId, string session) { }
+    // A Codex launch's session is now proved (never by folder or timing): the token that was issued
+    // with no session now answers for it (#3644). False when it did not take it.
+    bool Resolve(string launchId, string session) => false;
 }

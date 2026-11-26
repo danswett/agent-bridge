@@ -257,6 +257,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
     }
 
+    public SessionProcess? ProvenProcessOf(string id)
+    {
+        lock (_gate)
+        {
+            return _entries.TryGetValue(id, out var e) && e.Tracker.Discovered is { Proven: true, ProcessId: { } pid } d ? new SessionProcess(pid, d.ProcessStartedAt) : null;
+        }
+    }
+
     public SessionFiles? Files(string id)
     {
         lock (_gate)

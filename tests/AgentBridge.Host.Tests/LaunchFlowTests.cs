@@ -223,7 +223,8 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         public string? Prepare(string session, string launchId) { Calls.Add($"prepare {session} {launchId}"); return "tok-" + launchId; }
         public void Bind(string launchId, int processId, DateTimeOffset startedAt) => Calls.Add($"bind {launchId} {processId}");
         public void Abandon(string launchId) => Calls.Add($"abandon {launchId}");
-        public void Resolve(string launchId, string session) => Calls.Add($"resolve {launchId} {session}");
+        public bool Resolves = true;
+        public bool Resolve(string launchId, string session) { Calls.Add($"resolve {launchId} {session}"); return Resolves; }
     }
 
     [Fact]
@@ -239,6 +240,8 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launchId = credentials.Calls[0].Split(' ')[2];
         Assert.Equal("tok-" + launchId, environment[Launchers.TokenVariable]);
         Assert.Equal([$"prepare {session} {launchId}", $"bind {launchId} {Assert.Single(starter.Pids)}"], credentials.Calls);
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+        Assert.NotEqual(launchId, credentials.Calls[2].Split(' ')[2]);
     }
 
     [Fact]
