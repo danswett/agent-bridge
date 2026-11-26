@@ -260,11 +260,16 @@ Where the check looks:
   `CODEX_HOME` named `.codex` and placed above either one refuses too, as does a folder there
   that cannot be listed.
 
-**Passing this check does not start Codex.** `LaunchService` then refuses every `agent:` or
-fleet Codex launch issued no worker credential: the script fleet route, a grant's (local, or
-`fleet.launch`) and an agent's own, with `ask` or Allow all. A new Codex session has no id to
-bind one to yet, so until one is issued (#4650) none starts, and Codex gets neither the `read`
-(§4) nor the `read+reply` (§11) credential. A person's own launch is unchanged.
+**Passing this check is not enough to start Codex.** `LaunchService` then refuses every `agent:`
+or fleet Codex launch issued no worker credential: the script fleet route, a grant's (local, or
+`fleet.launch`) and an agent's own, with `ask` or Allow all. A Codex launch is issued one before
+it starts, the `read` (§4) credential, or the `read+reply` (§11) one for a fleet worker, so it
+starts; it is refused, with nothing started, when issuing fails. A new Codex session has no id yet,
+so the credential is **unresolved**: it answers no `agent.hello` until there is proof of which
+session the launch started. The rule asks for a credential issued, not an identity: without that
+proof the worker, Allow all included, runs with **no usable credential and cannot act as a session**
+([agent-principals.md §3.3](agent-principals.md): what is proof, when there is none and what that
+costs). A person's own launch gets one the same way.
 
 **Not guaranteed for Codex:**
 * the person's own settings: `~/.codex` (or `CODEX_HOME`), with its trusted projects, rules,
@@ -285,7 +290,7 @@ bind one to yet, so until one is issued (#4650) none starts, and Codex gets neit
 * the check runs once, before the process starts;
 * `ask` does not make Codex ask every time: the host adds no approval flag, so the person's
   Codex settings and sandbox decide (§8's "every action asks" is not assured);
-* once Codex is given a credential: a launch that never registers leaves a launch record with
+* a Codex launch that never registers leaves a launch record with
   no session id, and the launched-session check then refuses unrelated sessions (it fails
   closed; a person's Codex launch does the same).
 

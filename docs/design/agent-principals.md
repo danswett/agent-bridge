@@ -169,7 +169,7 @@ person reads ("from copilot on *DSWETT-HOME*") is built from verified structured
 
 | Session | Credential? | How |
 |---|---|---|
-| **Launched by the host**: `session.launch` from any device, a launch by an agent, a resume, a transfer, or `agent-bridge-host launch` | **Yes**, at launch | The host mints it before it starts the process, and puts it in the child's environment (§3.3). A Codex launch, whose id isn't known in advance, is bound when the launch binds its session (v1-launch.md:153-156) |
+| **Launched by the host**: `session.launch` from any device, a launch by an agent, a resume, a transfer, or `agent-bridge-host launch` | **Yes**, at launch | The host mints it before it starts the process, and puts it in the child's environment (§3.3). A Codex launch, whose id isn't known in advance, gets its credential unresolved and it takes the session's id when the launch binds its session by process (§3.3 "Codex", v1-launch.md:153-156) |
 | **Adopted** | **Yes**, at adoption | A person at the machine adopts a live session the host discovered (§3.5) |
 | **Manually started** (typed in a terminal, never adopted) | **No** | Its processes are unattributed pipe callers: **typed status only, and no acting ops** (§3.4), superseding local-pipe.md:95. It has no remote reach, and no attribution, because there is nothing to attribute |
 | **Sub-agents** of a credentialed session | Use the parent's credential | They run in the same process tree, and attribution is per session (subagents.md). The audit records `source` when a sub-agent's tool call made the request, where the host can tell. Whether sub-agents should share it is Q42 |
@@ -195,6 +195,23 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
     (additive to `session.launch`, default: the policy's);
   * a launch made **by an agent** can never widen its sender's scope, and inherits its
     conversation `chain`, in which the launched session counts as one more distinct session (§5.4).
+* **Codex (#3644).** A Codex chooses its own session id, so its launch's credential is issued with no session: it is held under the
+  launch id and bound to the started process as any other. `agent.hello` is refused (`its session has not registered yet`, after
+  the ancestry checks, so a foreign caller learns nothing more) until the host has **proof** of the launch's session, whose process
+  is then the launch's or one under it (start times checked). Only two things are proof: a hook registration that **names** that
+  process, or the session's `thread-writer-locks` lock **held** by it (a `codex-code-mode-host` holder counts as the Codex above it).
+  Then the same record, token and id take the session id and speak as `agent:<machine>/<session>`. **Nothing else resolves:** not a
+  registration naming no process matched to the launch by folder and time (that lists the session, but an IDE or `exec` thread there
+  could write it first), a binding by timing alone, or a session remembered from before a restart. So Codex 0.172, whose registrations
+  name no process, resolves only if the lock is seen when the launch is first bound. Same-user code can forge a registration (§3.4).
+  A session another credential already holds (a person adopted it first) is never taken. An unresolved credential is memory-only.
+  **Inert (accepted P2, #4652).** A Codex, an Allow-all one included, can run with **no usable credential**: it never registers,
+  registers after the follow window, is bound without proof, cannot take its session (held, or its root gone), or the host restarts
+  first. It **cannot act as a session**: `agent.hello` is refused or the token dead (revoked when following stops), so no `agent.send`
+  or `fleet.list`; it is still classed as an agent process, so person-only operations stay refused; a Slipgates MCP server that
+  inherits the token cannot open and lists no tools (whether Codex passes it one was not checked). It still works in its folder with
+  its launch's permissions. #4651 requires a credential **issued**, not one with an identity. **CHANGE** from the earlier text,
+  which bound a Codex "when the launch binds its session" without saying how or what happens before.
 * **Expiry.** A token is valid while its session's bound process lives, and for at most
   `agents.credentialDays` (default **7**, Q42). A longer-lived session is renewed with one press
   at the machine, or **remotely** from a person's device with presence. A remote renewal is

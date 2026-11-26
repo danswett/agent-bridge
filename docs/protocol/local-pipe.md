@@ -284,7 +284,7 @@ It is accepted only when the token matches a live credential (compared in consta
 caller's ancestry was read in full, and the credential's root process, with the same start time,
 is among the caller's ancestors. Anything else is refused, and a token presented from outside its
 session is logged as `credential presented from outside its session`. `AGENT_BRIDGE_SESSION` is
-never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`.
+never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`. A Codex launch's credential, issued before the session id is known, is refused with `its session has not registered yet` until the host has proof of the launch's session, which may never come; retry shortly ([design/agent-principals.md §3.3](../design/agent-principals.md)).
 
 A script credential (`kind` `script`) refuses an agent in its caller's ancestry. Unbound, it needs
 that ancestry read in full, so a scheduled task (SYSTEM service host) is refused. Minted with

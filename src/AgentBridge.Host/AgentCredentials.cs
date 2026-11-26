@@ -18,6 +18,10 @@ public sealed record AgentCredential(string Id, string Session, string LaunchId,
     string Kind = "session", string? Principal = null)
 {
     public bool FleetLaunch { get; init; }
+    // A launch's credential issued before its session id was known (a Codex chooses its own, #3644): Session holds the launch id, which
+    // no session id can equal (a UUID has dashes), until AgentCredentials.Resolve gives it the real one. Never answered, never saved.
+    [JsonIgnore]
+    public bool Unresolved => Kind == "session" && LaunchId.Length > 0 && Session == LaunchId && LaunchId != AgentCredentials.AdoptedLaunch;
     // Set only by scripts add --task: the scheduled task (and its files) this credential answers from.
     public ScriptTaskBinding? ScheduledTask { get; init; }
     // Record construction only; minting and persisting a script token are separate operations.
@@ -286,8 +290,9 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     // A launch's token is issued before its process exists, so it is bound to none and answers to
     // nobody until Bind. Launched agents may read only: the agents policy (§5.1) widens that later.
-    public string? Prepare(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeRead);
-    public string PrepareFleet(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeReadReply, depth: 1);
+    // An empty session (Codex picks its own) is held under the launch id until Resolve (§3.2).
+    public string? Prepare(string session, string launchId) => Mint(session.Length > 0 ? session : launchId, launchId, 0, default, AgentProtocol.ScopeRead);
+    public string PrepareFleet(string session, string launchId) => Mint(session.Length > 0 ? session : launchId, launchId, 0, default, AgentProtocol.ScopeReadReply, depth: 1);
 
     // Called only by the person-authorized management path, never a remote/agent operation.
     // No token is returned. Both hashes stand until a successful fleet read retires the old one.
@@ -375,9 +380,35 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         if (stale) { LetGo(key); }
     }
 
+    // Gives a launch's credential the session the host has proved it started (#3644). Only an unresolved one, once: a resolved credential is
+    // never pointed at another session. A session another credential already holds (a person adopted it first) is never taken: the unresolved
+    // one is dropped instead, and the other is left as it was.
+    public bool Resolve(string launchId, string session)
+    {
+        lock (gate)
+        {
+            var i = records.FindIndex(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && r.Credential.Unresolved);
+            if (i < 0 || !ValidSession(session)) { return false; }
+            var credential = records[i].Credential;
+            if (credential.RootPid <= 0 || !rootAlive(credential.RootPid, credential.RootStartUtc)) { return false; }
+            if (records.Any(r => r.Credential.Session == session))
+            {
+                Remove(r => r.Credential.Id == credential.Id, $"session {session} already holds a credential");
+                return false;
+            }
+            records[i] = records[i] with { Credential = credential with { Session = session } };
+            try { Save(); }
+            catch (IOException e) { Fault($"could not save: {e.Message}"); }
+            catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
+            log($"agent credentials: credential {credential.Id} now answers for session {session}");
+            return true;
+        }
+    }
+
+    // The launch did not start, or never had its session proved: its unbound or unresolved credential dies. A resolved one is never touched.
     public void Abandon(string launchId)
     {
-        lock (gate) { Remove(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && r.Credential.RootPid == 0, "its launch did not start"); }
+        lock (gate) { Remove(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && (r.Credential.RootPid == 0 || r.Credential.Unresolved), "its launch did not start, or its session was never proved"); }
     }
 
     // Whether this script credential may be used from this ancestry: not inside an agent session, and, for a task-bound one, only from a running instance of its
@@ -468,6 +499,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             lock (gate) { Remove(r => r.Credential.Id == match.Id, "its session's process ended"); }
             return Outside(match, "the session's process has ended", ancestry);
         }
+        // A Codex launch's token, before the host has proved which session the launch started: it names no session to speak as (#3644).
+        if (match.Unresolved) { return Refused("its session has not registered yet; try again in a moment"); }
         return new AgentHelloDecision(match, null);
     }
 
@@ -796,7 +829,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     {
         if (problem is not null) { throw new IOException("the credential store is faulted; no changes were saved"); }
         var temp = path + ".tmp";
-        File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Saved(1, [.. records]), Json));
+        // An unresolved launch credential lives in memory only (#3644): a restart before its session registers lapses it, which is the safe way to lose one.
+        File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(new Saved(1, [.. records.Where(r => !r.Credential.Unresolved)]), Json));
         File.Move(temp, path, overwrite: true);
     }
 

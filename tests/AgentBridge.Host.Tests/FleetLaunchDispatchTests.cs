@@ -138,17 +138,22 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
     }
 
     // #3644: an agent's launch, a local grant's and a fleet.launch from another host reach the launcher without the fleet flag.
-    // Codex is given no worker credential there, so it must not start; Claude, which is given one, is the control.
+    // Codex (#4650: its credential is issued unresolved) starts only when one was issued, and not when issuing fails; Claude is the control.
     [Theory]
-    [InlineData("codex", "local-grant", "allowAll")]
-    [InlineData("codex", "local-grant", "ask")]
-    [InlineData("codex", "fleet.launch", "allowAll")]
-    [InlineData("codex", "fleet.launch", "ask")]
-    [InlineData("codex", "agent", "ask")]
-    [InlineData("claude", "local-grant", "allowAll")]
-    [InlineData("claude", "fleet.launch", "allowAll")]
-    [InlineData("claude", "agent", "ask")]
-    public async Task An_agent_or_granted_launch_starts_only_with_a_worker_credential(string agent, string route, string permissions)
+    [InlineData("codex", "local-grant", "allowAll", true)]
+    [InlineData("codex", "local-grant", "allowAll", false)]
+    [InlineData("codex", "local-grant", "ask", true)]
+    [InlineData("codex", "local-grant", "ask", false)]
+    [InlineData("codex", "fleet.launch", "allowAll", true)]
+    [InlineData("codex", "fleet.launch", "allowAll", false)]
+    [InlineData("codex", "fleet.launch", "ask", true)]
+    [InlineData("codex", "fleet.launch", "ask", false)]
+    [InlineData("codex", "agent", "ask", true)]
+    [InlineData("codex", "agent", "ask", false)]
+    [InlineData("claude", "local-grant", "allowAll", true)]
+    [InlineData("claude", "fleet.launch", "allowAll", true)]
+    [InlineData("claude", "agent", "ask", true)]
+    public async Task An_agent_or_granted_launch_starts_only_with_a_worker_credential(string agent, string route, string permissions, bool issues)
     {
         locator.Installed[agent] = $@"C:\fake\{agent}.exe";
         Directory.CreateDirectory(f.CodexRegistrations);
@@ -191,6 +196,9 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
             Effort: offered.Efforts[0], Context: offered.Contexts[0], Permissions: permissions, Prompt: "fixture");
         var request = new LaunchRequest { Request = input.Request.ToString("D"), Agent = agent, Workspace = "App", Permissions = permissions, Prompt = "fixture" };
 
+        // The store cannot be saved from here on, so the launch's credential cannot be issued.
+        if (!issues) { Directory.CreateDirectory(Path.Combine(profile, AgentCredentials.FileName) + ".tmp"); }
+
         var result = route switch
         {
             "fleet.launch" => (await pipe.LaunchGrantedRemoteAsync(subject, input)).Result,
@@ -200,7 +208,12 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
 
         // The launch got past the worktree check, so what follows is the credential rule's answer.
         Assert.True(answers.Count == 1 && answers[0] is null, $"{result.Outcome}: {result.Reason}; check: {string.Join(" | ", answers)}");
-        if (agent == "claude") { Assert.NotNull(Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]); return; }
+        if (issues)
+        {
+            Assert.NotNull(Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]);
+            Assert.NotEqual(LaunchOutcome.Refused, result.Outcome);
+            return;
+        }
         Assert.Empty(starter.Specs);
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
         Assert.Empty(Directory.GetDirectories(config.WorktreeRoot));

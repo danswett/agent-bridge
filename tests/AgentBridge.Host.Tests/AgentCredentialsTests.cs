@@ -101,6 +101,127 @@ public sealed class AgentCredentialsTests : IDisposable
         Assert.NotNull(store.Check(second, Inside()).Accepted);
     }
 
+    // #3644: Codex picks its own session id, so its launch's credential starts with none (Session is the launch id, which no
+    // hello is ever answered for) and takes the session's id when the host proves which session the launch started.
+    [Fact]
+    public void A_launch_whose_session_is_not_known_yet_is_refused_until_it_registers_and_then_speaks_as_that_session()
+    {
+        var lines = new List<string>();
+        var store = new AgentCredentials(root, "machine1", log: lines.Add);
+        var token = store.Prepare("", "launch-1")!;
+        Assert.Null(store.Check(token, Inside()).Accepted);
+        store.Bind("launch-1", 100, Started);
+        var early = store.Check(token, Inside());
+        Assert.Null(early.Accepted);
+        Assert.Contains("has not registered yet", early.Refusal);
+
+        store.Resolve("launch-1", "sess-codex");
+        var accepted = store.Check(token, Inside()).Accepted!;
+        Assert.Equal("sess-codex", accepted.Session);
+        Assert.Equal("agent:machine1/sess-codex", store.PrincipalOf(accepted));
+        Assert.Equal(AgentProtocol.ScopeRead, accepted.Scope);
+        Assert.DoesNotContain(lines, l => l.Contains(token, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_fleet_launch_whose_session_is_not_known_yet_resolves_as_read_reply_at_depth_one()
+    {
+        var store = Store();
+        var token = store.PrepareFleet("", "launch-1");
+        store.Bind("launch-1", 100, Started);
+        Assert.Null(store.Check(token, Inside()).Accepted);
+        store.Resolve("launch-1", "sess-codex");
+        var accepted = store.Check(token, Inside()).Accepted!;
+        Assert.Equal((AgentProtocol.ScopeReadReply, 1), (accepted.Scope, accepted.Depth));
+    }
+
+    [Fact]
+    public void Two_launches_that_do_not_know_their_session_yet_do_not_replace_each_other()
+    {
+        var store = Store();
+        var first = store.Prepare("", "launch-1")!;
+        var second = store.Prepare("", "launch-2")!;
+        store.Bind("launch-1", 100, Started);
+        store.Bind("launch-2", 200, Started);
+        store.Resolve("launch-1", "sess-a");
+        store.Resolve("launch-2", "sess-b");
+        Assert.Equal("sess-a", store.Check(first, Inside()).Accepted!.Session);
+        Assert.Equal("sess-b", store.Check(second, Inside(rootPid: 200)).Accepted!.Session);
+    }
+
+    [Fact]
+    public void A_resolved_credential_is_still_held_to_its_process_and_a_session_cannot_be_given_to_it_twice()
+    {
+        var store = Store();
+        var token = store.Prepare("", "launch-1")!;
+        store.Bind("launch-1", 100, Started);
+        Assert.True(store.Resolve("launch-1", "sess-a"));
+        Assert.False(store.Resolve("launch-1", "sess-b"));
+        Assert.Equal("sess-a", store.Check(token, Inside()).Accepted!.Session);
+        Assert.Null(store.Check(token, Inside(rootPid: 101)).Accepted);
+        Assert.Null(store.Check(token, Inside(started: Started.AddHours(3))).Accepted);
+        Assert.Null(store.Check(token, Inside(complete: false)).Accepted);
+    }
+
+    [Fact]
+    public void A_session_another_credential_already_holds_is_never_taken_and_loses_the_unresolved_one()
+    {
+        var store = Store();
+        var held = store.Mint("sess-9", "adopted", 200, Started, AgentProtocol.ScopeRead);
+        var token = store.Prepare("", "launch-1")!;
+        store.Bind("launch-1", 100, Started);
+        Assert.False(store.Resolve("launch-1", "sess-9"));
+        Assert.Null(store.Check(token, Inside()).Accepted);
+        Assert.Equal(1, store.Count);
+        Assert.Equal("sess-9", store.Check(held, Inside(rootPid: 200)).Accepted!.Session);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not a session id")]
+    [InlineData("0123456789012345678901234567890123456789")]
+    public void An_invalid_session_id_is_not_written_into_a_credential(string session)
+    {
+        var store = Store();
+        var token = store.Prepare("", "launch-1")!;
+        store.Bind("launch-1", 100, Started);
+        Assert.False(store.Resolve("launch-1", session));
+        Assert.False(store.Resolve("unknown-launch", "sess-a"));
+        Assert.Null(store.Check(token, Inside()).Accepted);
+        Assert.Null(Store().Problem);
+    }
+
+    [Fact]
+    public void Abandoning_a_launch_removes_a_bound_unresolved_credential_and_never_a_resolved_one()
+    {
+        var store = Store();
+        var unresolved = store.Prepare("", "launch-1")!;
+        store.Bind("launch-1", 100, Started);
+        store.Abandon("launch-1");
+        Assert.Null(store.Check(unresolved, Inside()).Accepted);
+        Assert.Equal(0, store.Count);
+
+        var resolved = store.Prepare("", "launch-2")!;
+        store.Bind("launch-2", 100, Started);
+        store.Resolve("launch-2", "sess-b");
+        store.Abandon("launch-2");
+        Assert.Equal("sess-b", store.Check(resolved, Inside()).Accepted!.Session);
+    }
+
+    [Fact]
+    public void An_unresolved_credential_is_never_written_to_disk_and_a_resolved_one_is()
+    {
+        var store = Store();
+        var token = store.Prepare("", "launch-1")!;
+        store.Bind("launch-1", 100, Started);
+        Assert.Equal(0, Store().Count);
+        Assert.Null(Store().Check(token, Inside()).Accepted);
+        Assert.DoesNotContain("launch-1", File.ReadAllText(Path.Combine(root, AgentCredentials.FileName)));
+
+        store.Resolve("launch-1", "sess-codex");
+        Assert.Equal("sess-codex", Store().Check(token, Inside()).Accepted!.Session);
+    }
+
     [Fact]
     public void An_unknown_or_malformed_token_is_refused()
     {
